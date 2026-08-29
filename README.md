@@ -1,6 +1,6 @@
 # Cut & Collect
 
-A 6-player, 2-team trick-taking card game built with React — hunt down the deck's four
+A 6+ player, 2-team trick-taking card game built with React — hunt down the deck's four
 10's before the other team does. First side to collect all four wins outright (a "420"
 mercy finish); otherwise whoever holds more when all four are decided wins the hand.
 
