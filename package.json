@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "author": "Rishi Gandhi",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -26,6 +27,7 @@
   "build": {
     "appId": "com.rishigandhi.cutandcollect",
     "productName": "Cut & Collect",
+    "icon": "build/icon.png",
     "files": ["dist/**/*", "electron/**/*", "leaderboard-store.js", "package.json"],
     "directories": { "output": "release" },
     "mac": { "target": "dir" }
