@@ -1,6 +1,8 @@
 # Future ideas (not scheduled)
 
-Captured for later — nothing here is being worked on yet.
+Captured for later — nothing here is being worked on yet. 
+
+START WITH UI GETTING BIGGER!
 
 ## Gameplay
 - Timed game mode — a time limit to pick and play a card each turn ("speed chess" style)
