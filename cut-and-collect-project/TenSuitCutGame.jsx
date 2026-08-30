@@ -145,9 +145,19 @@ function freshGame(seatNames, leader = 0) {
 }
 
 /* ---------- leaderboard persistence — a real file on disk
-   (cut-and-collect-project/leaderboard.json), served through a small dev-only
-   API added in vite.config.js, so it survives across sessions and browsers ---------- */
+   (cut-and-collect-project/leaderboard.json). Inside Electron, window.leaderboardAPI
+   (exposed by electron/preload.js) talks straight to the main process over IPC, no
+   server needed — this is what makes it work in a packaged .app. In a plain browser
+   (window.leaderboardAPI doesn't exist there), it falls back to fetching the small
+   dev-only API added in vite.config.js. ---------- */
 async function loadLeaderboard() {
+  if (window.leaderboardAPI) {
+    try {
+      return await window.leaderboardAPI.load();
+    } catch {
+      return [];
+    }
+  }
   try {
     const res = await fetch("/api/leaderboard");
     if (!res.ok) throw new Error("bad response");
@@ -157,6 +167,13 @@ async function loadLeaderboard() {
   }
 }
 async function saveLeaderboardEntry(entry) {
+  if (window.leaderboardAPI) {
+    try {
+      return await window.leaderboardAPI.save(entry);
+    } catch {
+      return null;
+    }
+  }
   try {
     const res = await fetch("/api/leaderboard", {
       method: "POST",
