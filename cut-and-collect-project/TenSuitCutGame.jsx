@@ -278,7 +278,7 @@ function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
   }, []);
 
   return (
-    <div style={styles.wrap}>
+    <div style={{ ...styles.wrap, ...styles.homeWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -334,7 +334,7 @@ function EndScreen({ result, leaderboard, onPlayAgain, onHome }) {
   }, []);
 
   return (
-    <div style={styles.wrap}>
+    <div style={{ ...styles.wrap, ...styles.endWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -352,7 +352,9 @@ function EndScreen({ result, leaderboard, onPlayAgain, onHome }) {
         </div>
       </div>
 
-      <Leaderboard entries={leaderboard} />
+      <div style={styles.endLeaderboardWrap}>
+        <Leaderboard entries={leaderboard} />
+      </div>
     </div>
   );
 }
@@ -882,6 +884,18 @@ const styles = {
     boxShadow: "0 0 0 1px #C9A24B33, 0 20px 50px rgba(0,0,0,0.5)",
     position: "relative",
   },
+  homeWrap: {
+    height: "calc(100vh - 20px)",
+    display: "flex",
+    flexDirection: "column",
+    boxSizing: "border-box",
+  },
+  endWrap: {
+    height: "calc(100vh - 20px)",
+    display: "flex",
+    flexDirection: "column",
+    boxSizing: "border-box",
+  },
   header: { textAlign: "center", marginBottom: 6, position: "relative" },
   topLeftControls: { position: "absolute", top: 10, left: 16, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 5 },
   topRightControls: { position: "absolute", top: 6, right: 16, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 },
@@ -1011,7 +1025,10 @@ const styles = {
     fontFamily: "'Bebas Neue', sans-serif", fontSize: 11, letterSpacing: 1, color: "#E7C878", whiteSpace: "nowrap",
   },
 
-  homeBody: { display: "flex", flexDirection: "column", gap: 16, alignItems: "center" },
+  homeBody: {
+    display: "flex", flexDirection: "column", gap: 16, alignItems: "center",
+    flex: 1, minHeight: 0,
+  },
   homeCard: {
     background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "22px 24px",
     display: "flex", flexDirection: "column", gap: 12, alignItems: "stretch", width: "100%", maxWidth: 420,
@@ -1025,7 +1042,7 @@ const styles = {
 
   rulesPanel: {
     background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "16px 20px", width: "100%",
-    maxHeight: 340, overflowY: "auto", boxSizing: "border-box",
+    flex: 1, minHeight: 0, overflowY: "auto", boxSizing: "border-box",
   },
   rulesTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 2, color: "#E7C878", marginBottom: 8 },
   rulesH1: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 21, letterSpacing: 1.5, color: "#E7C878", marginTop: 10, marginBottom: 4 },
@@ -1036,7 +1053,11 @@ const styles = {
   rulesP: { fontSize: 14.5, lineHeight: 1.6, color: "#cfd9c9", margin: "4px 0" },
   rulesList: { margin: "4px 0 8px 18px", padding: 0, fontSize: 14.5, lineHeight: 1.6, color: "#cfd9c9" },
 
-  leaderboardPanel: { background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "16px 20px", width: "100%", boxSizing: "border-box" },
+  leaderboardPanel: {
+    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "16px 20px", width: "100%",
+    boxSizing: "border-box", height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-start",
+  },
+  endLeaderboardWrap: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" },
   leaderboardTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 2, color: "#E7C878", marginBottom: 8, textAlign: "center" },
   leaderboardEmpty: { fontSize: 14.5, color: "#8fa595", textAlign: "center", fontStyle: "italic" },
   leaderboardTable: { display: "flex", flexDirection: "column", gap: 6 },
