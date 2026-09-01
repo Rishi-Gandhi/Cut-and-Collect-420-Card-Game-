@@ -16,11 +16,11 @@ Captured for later — nothing here is being worked on yet.
   your own `.mp3`/`.wav` into `public/sounds/` (see its README) to override any of them.
 - ~~Simple play/deal animations instead of cards appearing instantly~~ — done, CSS
   keyframes (`cardPlayIn`, `cardDealIn`) in `TenSuitCutGame.jsx`
-- ~~Make the overall UI bigger~~ — done, cards, fonts, table, and panels all sized up.
+- ~~Make the overall UI bigger— done, cards, fonts, table, and panels all sized up.~~
   Later trimmed the vertical spacing/padding back down (table height, panel padding,
   header padding) since the taller layout was forcing scroll — cards/fonts stayed big,
   just the gaps around them shrank.
-- ~~Background music on the home screen and end screen~~ — done, separate synthesized
+- ~~Background music on the home screen and end screen— done, separate synthesized~~
   loops for each screen (mellower on Home, brighter on End), same real-file override
   option via `public/sounds/home-music.mp3` / `end-music.mp3`. Also tried a third loop
   for the Game screen — too much on top of the card-flip/point-scored sounds, so that
@@ -32,7 +32,7 @@ Captured for later — nothing here is being worked on yet.
 - Semi-multiplayer — a mix of some human players and some bots
 
 ## Leaderboard
-- ~~Track each player's overall win/loss/tie record across all time, not just per-win
+- ~~Track each player's overall win/loss/tie record across all time, not just per-win~~
   snapshots — plus their personal best (fewest games to reach a 420)~~ — done. One row
   per player now (`leaderboard-store.js`'s `recordResult`), updated after every hand
   (not just full "420" wins), with `personalBest` set only on an actual mercy win.
