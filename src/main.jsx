@@ -4,7 +4,7 @@ import TenSuitCutGame from "../cut-and-collect-project/TenSuitCutGame.jsx";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
+    <div style={{ display: "flex", justifyContent: "center", padding: 10 }}>
       <TenSuitCutGame />
     </div>
   </React.StrictMode>

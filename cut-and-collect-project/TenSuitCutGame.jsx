@@ -1,5 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import rulesRaw from "./RULES.md?raw";
+import {
+  unlockAudio,
+  playNewGame,
+  playCardFlip,
+  playFirstCut,
+  playPointScored,
+  playWinFanfare,
+  playLoseFanfare,
+  playTieFanfare,
+  startHomeMusic,
+  startEndMusic,
+  stopBackgroundMusic,
+} from "./sound.js";
 
 /* ---------- constants ---------- */
 const SUITS = ["♠", "♥", "♦", "♣"];
@@ -166,10 +179,14 @@ async function loadLeaderboard() {
     return [];
   }
 }
-async function saveLeaderboardEntry(entry) {
+/* Records the outcome of one hand (win/loss/tie) against the player's
+   lifetime record. personalBestCandidate is only passed on an actual "420"
+   mercy win — that's the only time "fewest games to reach 420" applies. */
+async function recordHandResult(name, result, personalBestCandidate = null) {
+  const payload = { name, result, personalBestCandidate };
   if (window.leaderboardAPI) {
     try {
-      return await window.leaderboardAPI.save(entry);
+      return await window.leaderboardAPI.save(payload);
     } catch {
       return null;
     }
@@ -178,7 +195,7 @@ async function saveLeaderboardEntry(entry) {
     const res = await fetch("/api/leaderboard", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(entry),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error("bad response");
     return await res.json();
@@ -198,17 +215,18 @@ export default function TenSuitCutGame() {
     loadLeaderboard().then(setLeaderboard);
   }, []);
 
+  // The win/loss/tie record and personal best are already saved by
+  // GameScreen's per-hand effect (every hand counts, not just the final
+  // victory) — this just re-fetches the now-current leaderboard and builds
+  // the celebratory details for the End screen banner.
   async function handleUserWin(details) {
-    const entry = {
+    const updated = await loadLeaderboard();
+    setLeaderboard(updated);
+    setWinResult({
       name: (playerName || "").trim() || "You",
       gameNumber: details.gameNumber,
       opponentTens: details.scores.B,
-      outcomes: details.outcomes,
-      date: new Date().toISOString(),
-    };
-    const updated = await saveLeaderboardEntry(entry);
-    setLeaderboard(updated ?? [...leaderboard, entry]);
-    setWinResult(entry);
+    });
     setScreen("end");
   }
 
@@ -254,9 +272,14 @@ function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const canStart = playerName.trim().length > 0;
 
+  useEffect(() => {
+    startHomeMusic();
+    return () => stopBackgroundMusic();
+  }, []);
+
   return (
     <div style={styles.wrap}>
-      <style>{FONT_IMPORT}</style>
+      <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
         <div style={styles.subtitle}>a ten-hunting trick game · six at the table</div>
@@ -280,7 +303,10 @@ function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
           <button
             style={{ ...styles.dealBtn, ...(canStart ? {} : styles.dealBtnDisabled) }}
             disabled={!canStart}
-            onClick={onStart}
+            onClick={() => {
+              unlockAudio();
+              onStart();
+            }}
           >
             Start Game
           </button>
@@ -302,9 +328,14 @@ function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
 
 /* ---------- end screen ---------- */
 function EndScreen({ result, leaderboard, onPlayAgain, onHome }) {
+  useEffect(() => {
+    startEndMusic();
+    return () => stopBackgroundMusic();
+  }, []);
+
   return (
     <div style={styles.wrap}>
-      <style>{FONT_IMPORT}</style>
+      <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
       </div>
@@ -332,22 +363,23 @@ function Leaderboard({ entries }) {
     <div style={styles.leaderboardPanel}>
       <div style={styles.leaderboardTitle}>LEADERBOARD</div>
       {top.length === 0 ? (
-        <div style={styles.leaderboardEmpty}>No 420 wins recorded yet — be the first!</div>
+        <div style={styles.leaderboardEmpty}>No hands recorded yet — be the first!</div>
       ) : (
         <div style={styles.leaderboardTable}>
-          {top.map((e, i) => {
-            const record = e.outcomes || { win: 0, loss: 0, tie: 0 };
-            return (
-              <div key={i} style={styles.leaderboardRow}>
-                <span style={styles.lbRank}>#{i + 1}</span>
-                <span style={styles.lbName}>{e.name}</span>
-                <span style={styles.lbDetail}>
-                  won it in {e.gameNumber} game{e.gameNumber === 1 ? "" : "s"} · record {record.win}W-{record.loss}L-{record.tie}T
-                </span>
-                <span style={styles.lbDate}>{new Date(e.date).toLocaleDateString()}</span>
-              </div>
-            );
-          })}
+          {top.map((e, i) => (
+            <div key={i} style={styles.leaderboardRow}>
+              <span style={styles.lbRank}>#{i + 1}</span>
+              <span style={styles.lbName}>{e.name}</span>
+              <span style={styles.lbDetail}>
+                {e.wins}W-{e.losses}L-{e.ties}T
+                {e.personalBest != null &&
+                  ` · PB: ${e.personalBest} game${e.personalBest === 1 ? "" : "s"}`}
+              </span>
+              <span style={styles.lbDate}>
+                {e.lastPlayed ? new Date(e.lastPlayed).toLocaleDateString() : ""}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -368,8 +400,14 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [game.log.length]);
 
+  useEffect(() => {
+    playNewGame();
+  }, [game.gameNumber]);
+
   /* commit a play onto the trick, then advance */
   const commitPlay = useCallback((seat, card, role) => {
+    if (role === "cut" && game.cutSuit === null) playFirstCut();
+    else playCardFlip();
     setGame((g) => {
       const hands = g.hands.map((h, i) => (i === seat ? h.filter((c) => c.id !== card.id) : h));
       const trick = [...g.trick, { seat, card, role }];
@@ -398,7 +436,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
       }
       return { ...g, hands, trick, cutSuit, log, turn: nextTurn };
     });
-  }, [seatNames]);
+  }, [seatNames, game.cutSuit]);
 
   /* resolve a completed trick */
   useEffect(() => {
@@ -456,6 +494,42 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
     return () => clearTimeout(t);
   }, [game.phase, seatNames]);
 
+  /* hand-over fanfare — a separate effect (not a call inside setGame's updater)
+     so React's dev-mode double-invoking of state updaters can't play it twice */
+  useEffect(() => {
+    if (game.phase !== "handOver" || !game.result) return;
+    const { type, team } = game.result;
+    if (type === "earlyTie") playTieFanfare();
+    else if (team === "A") playWinFanfare();
+    else playLoseFanfare();
+  }, [game.phase, game.result]);
+
+  /* a team capturing a ten gets its own chime — tracked by total score
+     climbing, so a new hand's reset back to 0 stays silent */
+  const prevScoreSum = useRef(game.scores.A + game.scores.B);
+  useEffect(() => {
+    const sum = game.scores.A + game.scores.B;
+    if (sum > prevScoreSum.current) playPointScored();
+    prevScoreSum.current = sum;
+  }, [game.scores.A, game.scores.B]);
+
+  /* every hand's outcome (not just an eventual full "420" win) counts toward
+     the player's lifetime record on the leaderboard — personalBest only
+     moves on an actual mercy win for Team A, since that's the only time
+     "fewest games to reach 420" applies */
+  useEffect(() => {
+    if (game.phase !== "handOver" || !game.result) return;
+    const { type, team } = game.result;
+    const name = (playerName || "").trim() || "You";
+    if (type === "earlyTie") {
+      recordHandResult(name, "tie");
+    } else if (type === "mercy") {
+      recordHandResult(name, team === "A" ? "win" : "loss", team === "A" ? game.gameNumber : null);
+    } else {
+      recordHandResult(name, team === "A" ? "win" : "loss");
+    }
+  }, [game.phase, game.result]);
+
   /* bot turns */
   useEffect(() => {
     if (game.phase !== "playing") return;
@@ -506,6 +580,23 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
     }
   }
 
+  // Dev/testing shortcut — instantly forces a Team A mercy finish so the
+  // Claim Victory → End screen flow can be checked without playing a full
+  // hand out. Goes through the exact same phase/result state a real mercy
+  // win would, so it's a real test of the whole path, leaderboard save
+  // included.
+  function autoWin() {
+    setGame((g) => ({
+      ...g,
+      trick: [],
+      scores: { ...g.scores, A: 4 },
+      tensWon: { A: ["♠", "♥", "♦", "♣"], B: g.tensWon.B },
+      log: [...g.log, "(dev) Auto Win triggered — Team A captures all four 10's."],
+      phase: "handOver",
+      result: { type: "mercy", team: "A" },
+    }));
+  }
+
   const yourTurn = game.phase === "playing" && game.turn === 0;
   const hand = game.hands[0];
   const ledSuit = game.trick.length ? game.trick[0].card.suit : null;
@@ -514,10 +605,11 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
 
   return (
     <div style={styles.wrap}>
-      <style>{FONT_IMPORT}</style>
-      <div style={{ ...styles.header, paddingTop: 90 }}>
+      <style>{GLOBAL_STYLE}</style>
+      <div style={{ ...styles.header, paddingTop: 66 }}>
         <div style={styles.topLeftControls}>
           <button style={styles.quitBtn} onClick={handleQuit}>Quit</button>
+          <button style={styles.autoWinBtn} onClick={autoWin}>Auto Win (dev)</button>
         </div>
         <div style={styles.topRightControls}>
           <div style={styles.gameCounter}>GAME #{game.gameNumber}</div>
@@ -541,7 +633,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
             <div style={styles.cutLabel}>CUT SUIT</div>
             <div style={{ ...styles.cutSeal, ...(game.cutSuit ? styles.cutSealSet : {}) }}>
               {game.cutSuit ? (
-                <span style={{ color: RED_SUITS.includes(game.cutSuit) ? "#8C2F2F" : "#1c2118", fontSize: 26 }}>{game.cutSuit}</span>
+                <span style={{ color: RED_SUITS.includes(game.cutSuit) ? "#8C2F2F" : "#1c2118", fontSize: 24 }}>{game.cutSuit}</span>
               ) : (
                 <span style={styles.cutSealDash}>—</span>
               )}
@@ -571,13 +663,19 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
               </div>
             ))}
 
-            {game.trick.map((p, i) => {
+            {game.trick.map((p) => {
               const pos = TRICK_POS[p.seat];
               const isWinning = currentWinner?.seat === p.seat;
               return (
                 <div
-                  key={i}
-                  style={{ ...styles.trickCard, left: pos.left, top: pos.top, ...(isWinning ? styles.trickCardWinning : {}) }}
+                  key={p.card.id}
+                  style={{
+                    ...styles.trickCard,
+                    left: pos.left,
+                    top: pos.top,
+                    ...(isWinning ? styles.trickCardWinning : {}),
+                    animation: "cardPlayIn 0.22s ease-out",
+                  }}
                 >
                   <CardFace card={p.card} tag={roleTag(p.role)} />
                 </div>
@@ -613,7 +711,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
             {game.result.type === "mercy" && game.result.team === "A" ? (
               <button
                 style={styles.dealBtn}
-                onClick={() => onUserWin({ gameNumber: game.gameNumber, scores: game.scores, outcomes: game.outcomes })}
+                onClick={() => onUserWin({ gameNumber: game.gameNumber, scores: game.scores })}
               >
                 Claim Victory →
               </button>
@@ -629,7 +727,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
             YOUR HAND {yourTurn && <span style={styles.turnPing}>● your turn</span>}
           </div>
           <div style={styles.handRow}>
-            {hand.map((card) => {
+            {hand.map((card, i) => {
               const legal =
                 yourTurn &&
                 game.phase === "playing" &&
@@ -646,7 +744,13 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
                   key={card.id}
                   onClick={() => legal && tryPlay(card)}
                   disabled={!legal}
-                  style={{ ...styles.handCardBtn, opacity: legal ? 1 : 0.35, cursor: legal ? "pointer" : "default" }}
+                  style={{
+                    ...styles.handCardBtn,
+                    opacity: legal ? 1 : 0.35,
+                    cursor: legal ? "pointer" : "default",
+                    animation: `cardDealIn 0.3s ease-out backwards`,
+                    animationDelay: `${i * 45}ms`,
+                  }}
                 >
                   <CardFace card={card} tag={preview} />
                 </button>
@@ -753,30 +857,41 @@ function renderMarkdownLite(md) {
 }
 
 /* ---------- styles ---------- */
-const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');`;
+const GLOBAL_STYLE = `
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
+
+@keyframes cardPlayIn {
+  from { opacity: 0; transform: translate(-50%,-50%) scale(0.4); }
+  to { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+}
+@keyframes cardDealIn {
+  from { opacity: 0; transform: translateY(18px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+`;
 
 const styles = {
   wrap: {
     fontFamily: "'Inter', sans-serif",
     background: "radial-gradient(ellipse at center, #123C2E 0%, #0A241B 70%, #061712 100%)",
     color: "#EDE6D3",
-    borderRadius: 14,
-    padding: "18px 18px 22px",
-    maxWidth: 880,
+    borderRadius: 16,
+    padding: "14px 18px 16px",
+    maxWidth: 1080,
     margin: "0 auto",
     boxShadow: "0 0 0 1px #C9A24B33, 0 20px 50px rgba(0,0,0,0.5)",
     position: "relative",
   },
-  header: { textAlign: "center", marginBottom: 10, position: "relative" },
-  topLeftControls: { position: "absolute", top: 24, left: 18, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 },
-  topRightControls: { position: "absolute", top: 12, right: 18, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 },
+  header: { textAlign: "center", marginBottom: 6, position: "relative" },
+  topLeftControls: { position: "absolute", top: 10, left: 16, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 5 },
+  topRightControls: { position: "absolute", top: 6, right: 16, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 },
   gameCounter: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, letterSpacing: 1.5,
-    color: "#A9C2AE", background: "rgba(0,0,0,0.28)", borderRadius: 6, padding: "6px 14px",
+    color: "#A9C2AE", background: "rgba(0,0,0,0.28)", borderRadius: 6, padding: "5px 12px",
   },
   outcomesCounter: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 1,
-    color: "#A9C2AE", background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "6px 14px",
+    color: "#A9C2AE", background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 12px",
   },
   outcomeWin: { color: "#8FD19E", fontWeight: 700 },
   outcomeLoss: { color: "#D68F8F", fontWeight: 700 },
@@ -784,37 +899,42 @@ const styles = {
   quitBtn: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, letterSpacing: 1.5,
     color: "#cfd9c9", background: "rgba(0,0,0,0.28)", border: "1px solid #6b6250", borderRadius: 6,
-    padding: "6px 14px", cursor: "pointer",
+    padding: "5px 12px", cursor: "pointer",
+  },
+  autoWinBtn: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: 1,
+    color: "#8fa595", background: "transparent", border: "1px dashed #6b6250", borderRadius: 6,
+    padding: "3px 8px", cursor: "pointer",
   },
   title: {
     fontFamily: "'Bebas Neue', sans-serif",
-    fontSize: 40,
+    fontSize: 38,
     letterSpacing: 4,
     color: "#E7C878",
     textShadow: "0 2px 0 rgba(0,0,0,0.4)",
   },
   subtitle: { fontSize: 12, letterSpacing: 2, color: "#A9C2AE", textTransform: "uppercase", marginTop: -6 },
-  body: { display: "flex", flexDirection: "column", gap: 12 },
+  body: { display: "flex", flexDirection: "column", gap: 8 },
 
   scorePanel: {
-    display: "flex", alignItems: "center", justifyContent: "center", gap: 24,
-    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "10px 16px",
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 26,
+    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "7px 18px",
   },
-  teamBox: { textAlign: "center", minWidth: 120 },
+  teamBox: { textAlign: "center", minWidth: 140 },
   teamName: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 2, color: "#EDE6D3" },
-  teamScoreNum: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 700, color: "#E7C878", lineHeight: 1 },
-  tensRow: { display: "flex", gap: 4, justifyContent: "center", marginTop: 4 },
+  teamScoreNum: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 28, fontWeight: 700, color: "#E7C878", lineHeight: 1 },
+  tensRow: { display: "flex", gap: 5, justifyContent: "center", marginTop: 3 },
   tenPip: {
-    width: 22, height: 16, borderRadius: 3, border: "1px solid #6b6250",
-    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, display: "flex",
+    width: 24, height: 18, borderRadius: 4, border: "1px solid #6b6250",
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, display: "flex",
     alignItems: "center", justifyContent: "center", color: "#6b6250",
   },
   tenPipFilled: { background: "#E7C878", border: "1px solid #E7C878", fontWeight: 700 },
 
   cutBadgeWrap: { textAlign: "center" },
-  cutLabel: { fontSize: 10, letterSpacing: 2, color: "#A9C2AE", marginBottom: 4 },
+  cutLabel: { fontSize: 10, letterSpacing: 2, color: "#A9C2AE", marginBottom: 3 },
   cutSeal: {
-    width: 48, height: 48, borderRadius: "50%", border: "2px dashed #6b6250",
+    width: 46, height: 46, borderRadius: "50%", border: "2px dashed #6b6250",
     display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto",
     background: "rgba(0,0,0,0.2)",
   },
@@ -823,115 +943,115 @@ const styles = {
 
   tableOuter: { display: "flex", justifyContent: "center" },
   tableFelt: {
-    position: "relative", width: "100%", maxWidth: 620, height: 360,
+    position: "relative", width: "100%", maxWidth: 700, height: 415,
     background: "radial-gradient(ellipse at center, #1b5a41 0%, #123C2E 65%, #0d2e21 100%)",
     borderRadius: "50% / 40%", border: "6px solid #3b2a17",
     boxShadow: "inset 0 0 40px rgba(0,0,0,0.5)",
   },
   seat: { position: "absolute", transform: "translate(-50%,-50%)", textAlign: "center" },
   seatLabel: {
-    fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 600,
-    color: "#cfd9c9", background: "rgba(0,0,0,0.35)", borderRadius: 6, padding: "3px 8px",
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600,
+    color: "#cfd9c9", background: "rgba(0,0,0,0.35)", borderRadius: 6, padding: "3px 9px",
     display: "inline-flex", gap: 6, alignItems: "center",
   },
   seatActive: { background: "#E7C878", color: "#1c2118" },
   seatWinning: { boxShadow: "0 0 0 2px #7CFC8A, 0 0 10px 2px #7CFC8Aaa" },
-  seatTeam: { fontSize: 9, opacity: 0.7 },
-  seatHandCount: { fontSize: 10, color: "#8fa595", marginTop: 2 },
+  seatTeam: { fontSize: 10, opacity: 0.7 },
+  seatHandCount: { fontSize: 11, color: "#8fa595", marginTop: 2 },
 
   trickCard: { position: "absolute", transform: "translate(-50%,-50%)" },
   trickCardWinning: { boxShadow: "0 0 0 2px #7CFC8A, 0 0 14px 3px #7CFC8Aaa", borderRadius: 8 },
   tableCenterNote: {
     position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
-    fontSize: 12, color: "#cfd9c9", fontStyle: "italic", opacity: 0.8, textAlign: "center", width: 160,
+    fontSize: 13, color: "#cfd9c9", fontStyle: "italic", opacity: 0.8, textAlign: "center", width: 180,
   },
 
   logPanel: {
-    background: "rgba(0,0,0,0.28)", borderRadius: 8, padding: "8px 12px",
-    maxHeight: 92, overflowY: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5,
-    lineHeight: 1.6, color: "#cfd9c9",
+    background: "rgba(0,0,0,0.28)", borderRadius: 8, padding: "6px 12px",
+    maxHeight: 66, overflowY: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5,
+    lineHeight: 1.5, color: "#cfd9c9",
   },
   logLine: { borderBottom: "1px solid rgba(255,255,255,0.05)", padding: "1px 0" },
 
   resultBanner: {
-    textAlign: "center", background: "rgba(0,0,0,0.35)", borderRadius: 10, padding: "14px 10px",
+    textAlign: "center", background: "rgba(0,0,0,0.35)", borderRadius: 10, padding: "10px 12px",
     border: "1px solid #E7C87866",
   },
-  resultText: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, letterSpacing: 2, color: "#E7C878", marginBottom: 10 },
+  resultText: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 2, color: "#E7C878", marginBottom: 8 },
   dealBtn: {
-    fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 12, letterSpacing: 1,
+    fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13, letterSpacing: 1,
     background: "#E7C878", color: "#1c2118", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer",
   },
   dealBtnDisabled: { opacity: 0.4, cursor: "not-allowed" },
 
-  pendingBtns: { display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" },
+  pendingBtns: { display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" },
   trashBtn: {
-    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 600, background: "transparent",
-    color: "#cfd9c9", border: "1px solid #6b6250", borderRadius: 6, padding: "8px 12px", cursor: "pointer",
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, background: "transparent",
+    color: "#cfd9c9", border: "1px solid #6b6250", borderRadius: 6, padding: "8px 14px", cursor: "pointer",
   },
 
-  handPanel: { background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "10px 12px" },
+  handPanel: { background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "8px 14px" },
   handHeader: {
-    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: 2, color: "#A9C2AE",
-    marginBottom: 8, display: "flex", gap: 10, alignItems: "center",
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 2, color: "#A9C2AE",
+    marginBottom: 6, display: "flex", gap: 10, alignItems: "center",
   },
   turnPing: { color: "#E7C878", fontWeight: 700 },
-  handRow: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" },
+  handRow: { display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" },
   handCardBtn: { background: "none", border: "none", padding: 0, transition: "transform 0.15s" },
 
   card: {
-    width: 56, height: 78, background: "#F5EFD9", borderRadius: 6, border: "1px solid #C9A24B",
+    width: 72, height: 100, background: "#F5EFD9", borderRadius: 8, border: "1px solid #C9A24B",
     boxShadow: "0 2px 5px rgba(0,0,0,0.45)", position: "relative", fontFamily: "'IBM Plex Mono', monospace",
   },
-  cardCorner: { position: "absolute", top: 3, left: 4, fontSize: 10, fontWeight: 700, lineHeight: 1.1, textAlign: "center" },
-  cardCornerBR: { top: "auto", left: "auto", bottom: 3, right: 4, transform: "rotate(180deg)" },
-  cardCenter: { position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", fontSize: 22 },
+  cardCorner: { position: "absolute", top: 4, left: 5, fontSize: 12, fontWeight: 700, lineHeight: 1.1, textAlign: "center" },
+  cardCornerBR: { top: "auto", left: "auto", bottom: 4, right: 5, transform: "rotate(180deg)" },
+  cardCenter: { position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", fontSize: 28 },
   cardTag: {
-    position: "absolute", bottom: -15, left: "50%", transform: "translateX(-50%)",
-    fontFamily: "'Bebas Neue', sans-serif", fontSize: 9, letterSpacing: 1, color: "#E7C878", whiteSpace: "nowrap",
+    position: "absolute", bottom: -18, left: "50%", transform: "translateX(-50%)",
+    fontFamily: "'Bebas Neue', sans-serif", fontSize: 11, letterSpacing: 1, color: "#E7C878", whiteSpace: "nowrap",
   },
 
-  homeBody: { display: "flex", flexDirection: "column", gap: 14, alignItems: "center" },
+  homeBody: { display: "flex", flexDirection: "column", gap: 16, alignItems: "center" },
   homeCard: {
-    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "18px 20px",
-    display: "flex", flexDirection: "column", gap: 10, alignItems: "stretch", width: "100%", maxWidth: 360,
+    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "22px 24px",
+    display: "flex", flexDirection: "column", gap: 12, alignItems: "stretch", width: "100%", maxWidth: 420,
   },
-  homeLabel: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: 2, color: "#A9C2AE" },
+  homeLabel: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 2, color: "#A9C2AE" },
   nameInput: {
-    width: "100%", boxSizing: "border-box", fontFamily: "'IBM Plex Mono', monospace", fontSize: 14,
-    background: "#0d2e21", color: "#EDE6D3", border: "1px solid #6b6250", borderRadius: 6, padding: "8px 10px",
+    width: "100%", boxSizing: "border-box", fontFamily: "'IBM Plex Mono', monospace", fontSize: 16,
+    background: "#0d2e21", color: "#EDE6D3", border: "1px solid #6b6250", borderRadius: 6, padding: "10px 12px",
     outline: "none",
   },
 
   rulesPanel: {
-    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "14px 16px", width: "100%",
-    maxHeight: 300, overflowY: "auto", boxSizing: "border-box",
+    background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "16px 20px", width: "100%",
+    maxHeight: 340, overflowY: "auto", boxSizing: "border-box",
   },
-  rulesTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, letterSpacing: 2, color: "#E7C878", marginBottom: 8 },
-  rulesH1: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1.5, color: "#E7C878", marginTop: 10, marginBottom: 4 },
+  rulesTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 2, color: "#E7C878", marginBottom: 8 },
+  rulesH1: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 21, letterSpacing: 1.5, color: "#E7C878", marginTop: 10, marginBottom: 4 },
   rulesH2: {
-    fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 12.5, letterSpacing: 1.5,
+    fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 14.5, letterSpacing: 1.5,
     color: "#E7C878", marginTop: 10, marginBottom: 4, textTransform: "uppercase",
   },
-  rulesP: { fontSize: 12.5, lineHeight: 1.6, color: "#cfd9c9", margin: "4px 0" },
-  rulesList: { margin: "4px 0 8px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.6, color: "#cfd9c9" },
+  rulesP: { fontSize: 14.5, lineHeight: 1.6, color: "#cfd9c9", margin: "4px 0" },
+  rulesList: { margin: "4px 0 8px 18px", padding: 0, fontSize: 14.5, lineHeight: 1.6, color: "#cfd9c9" },
 
-  leaderboardPanel: { background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "14px 16px", width: "100%", boxSizing: "border-box" },
-  leaderboardTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, letterSpacing: 2, color: "#E7C878", marginBottom: 8, textAlign: "center" },
-  leaderboardEmpty: { fontSize: 12.5, color: "#8fa595", textAlign: "center", fontStyle: "italic" },
+  leaderboardPanel: { background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "16px 20px", width: "100%", boxSizing: "border-box" },
+  leaderboardTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 2, color: "#E7C878", marginBottom: 8, textAlign: "center" },
+  leaderboardEmpty: { fontSize: 14.5, color: "#8fa595", textAlign: "center", fontStyle: "italic" },
   leaderboardTable: { display: "flex", flexDirection: "column", gap: 6 },
   leaderboardRow: {
-    display: "flex", alignItems: "center", gap: 10, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5,
-    color: "#cfd9c9", background: "rgba(255,255,255,0.03)", borderRadius: 6, padding: "6px 10px", flexWrap: "wrap",
+    display: "flex", alignItems: "center", gap: 10, fontFamily: "'IBM Plex Mono', monospace", fontSize: 13.5,
+    color: "#cfd9c9", background: "rgba(255,255,255,0.03)", borderRadius: 6, padding: "8px 12px", flexWrap: "wrap",
   },
-  lbRank: { color: "#E7C878", fontWeight: 700, width: 28 },
-  lbName: { fontWeight: 700, color: "#EDE6D3", minWidth: 80 },
+  lbRank: { color: "#E7C878", fontWeight: 700, width: 30 },
+  lbName: { fontWeight: 700, color: "#EDE6D3", minWidth: 90 },
   lbDetail: { flex: 1, color: "#A9C2AE" },
-  lbDate: { color: "#6b6250", fontSize: 10 },
+  lbDate: { color: "#6b6250", fontSize: 11.5 },
 
   endBanner: {
-    textAlign: "center", background: "rgba(0,0,0,0.35)", borderRadius: 10, padding: "20px 16px",
-    border: "1px solid #E7C87866", marginBottom: 14,
+    textAlign: "center", background: "rgba(0,0,0,0.35)", borderRadius: 10, padding: "24px 20px",
+    border: "1px solid #E7C87866", marginBottom: 16,
   },
-  endSub: { fontSize: 13, color: "#cfd9c9", marginBottom: 14 },
+  endSub: { fontSize: 15, color: "#cfd9c9", marginBottom: 16 },
 };

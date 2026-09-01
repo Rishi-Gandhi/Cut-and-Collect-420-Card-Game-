@@ -1,7 +1,7 @@
 import electron from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readLeaderboard, appendLeaderboardEntry } from "../leaderboard-store.js";
+import { readLeaderboard, recordResult } from "../leaderboard-store.js";
 
 const { app, BrowserWindow, ipcMain } = electron;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,20 +14,20 @@ const DEV_SERVER_URL = "http://localhost:5173";
 
 // A packaged .app is a read-only bundle — it can't write a save file into
 // itself, and the original project folder won't even exist on someone else's
-// machine. So a packaged build saves to the OS's real per-user app-data folder
-// instead. Running unpackaged (npm run electron:dev), we reuse the exact same
-// project file the browser/dev-server version uses, so both stay in sync.
+// machine. So it saves to the OS's real per-user app-data folder instead.
+// Dev mode (npm run electron:dev) uses that exact same folder too, rather
+// than a separate project-folder copy — otherwise dev-mode games and
+// packaged-app games silently save to two different files, which is exactly
+// how a real win (Sanu's, Aug 2026) went "missing" from dev mode even though
+// it was never actually lost, just saved somewhere dev mode wasn't looking.
 function getLeaderboardPath() {
-  if (app.isPackaged) {
-    return path.join(app.getPath("userData"), "leaderboard.json");
-  }
-  return path.join(__dirname, "../cut-and-collect-project/leaderboard.json");
+  return path.join(app.getPath("userData"), "leaderboard.json");
 }
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1000,
-    height: 900,
+    width: 1180,
+    height: 980,
     backgroundColor: "#061712",
     title: "Cut & Collect",
     webPreferences: {
@@ -46,7 +46,7 @@ function createWindow() {
 }
 
 ipcMain.handle("leaderboard:load", () => readLeaderboard(getLeaderboardPath()));
-ipcMain.handle("leaderboard:save", (event, entry) => appendLeaderboardEntry(getLeaderboardPath(), entry));
+ipcMain.handle("leaderboard:save", (event, payload) => recordResult(getLeaderboardPath(), payload));
 
 app.whenReady().then(() => {
   createWindow();

@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readLeaderboard, appendLeaderboardEntry } from "./leaderboard-store.js";
+import { readLeaderboard, recordResult } from "./leaderboard-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LEADERBOARD_PATH = path.join(__dirname, "cut-and-collect-project/leaderboard.json");
@@ -26,15 +26,15 @@ function leaderboardApiPlugin() {
           let body = "";
           req.on("data", (chunk) => (body += chunk));
           req.on("end", () => {
-            let entry;
+            let payload;
             try {
-              entry = JSON.parse(body);
+              payload = JSON.parse(body);
             } catch {
               res.statusCode = 400;
               res.end(JSON.stringify({ error: "invalid JSON" }));
               return;
             }
-            const updated = appendLeaderboardEntry(LEADERBOARD_PATH, entry);
+            const updated = recordResult(LEADERBOARD_PATH, payload);
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify(updated));
           });

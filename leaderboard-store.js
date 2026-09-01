@@ -7,21 +7,65 @@ import fs from "node:fs";
      in a packaged build (a .app bundle is read-only and can't be written into),
      or the same project file when running unpackaged via `npm run electron:dev`.
    Each caller decides WHERE the file lives; this module only knows how to
-   read/write/sort whatever path it's given. */
+   read/write/sort whatever path it's given.
+
+   One row per player, tracking their lifetime win/loss/tie record plus their
+   personal best (fewest hands to reach a full "420") — not a growing list of
+   one-row-per-win snapshots like the original design. */
+
+function normalizeEntry(e) {
+  if (typeof e.wins === "number") return e; // already the current shape
+  // Upgrade an old per-win-snapshot row (name/gameNumber/opponentTens/outcomes/date)
+  // into the new shape, using what it already recorded.
+  const outcomes = e.outcomes || {};
+  return {
+    name: e.name,
+    wins: outcomes.win || 0,
+    losses: outcomes.loss || 0,
+    ties: outcomes.tie || 0,
+    personalBest: typeof e.gameNumber === "number" && (outcomes.win || 0) > 0 ? e.gameNumber : null,
+    lastPlayed: e.date || null,
+  };
+}
 
 export function readLeaderboard(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return raw.map(normalizeEntry);
   } catch {
     return [];
   }
 }
 
-export function appendLeaderboardEntry(filePath, entry) {
-  const updated = [...readLeaderboard(filePath), entry].sort((a, b) => {
-    if (a.opponentTens !== b.opponentTens) return a.opponentTens - b.opponentTens;
-    return a.gameNumber - b.gameNumber;
+function sortLeaderboard(list) {
+  return [...list].sort((a, b) => {
+    const aHas = a.personalBest != null;
+    const bHas = b.personalBest != null;
+    if (aHas !== bHas) return aHas ? -1 : 1;
+    if (aHas && bHas && a.personalBest !== b.personalBest) return a.personalBest - b.personalBest;
+    return b.wins - b.losses - (a.wins - a.losses);
   });
-  fs.writeFileSync(filePath, JSON.stringify(updated, null, 2));
-  return updated;
+}
+
+/* Records the outcome of one hand for a player — updates their lifetime
+   win/loss/tie totals, and (only when personalBestCandidate is passed, i.e.
+   this hand was a full "420" mercy win) their personal best. */
+export function recordResult(filePath, { name, result, personalBestCandidate }) {
+  const list = readLeaderboard(filePath);
+  let entry = list.find((e) => e.name === name);
+  if (!entry) {
+    entry = { name, wins: 0, losses: 0, ties: 0, personalBest: null, lastPlayed: null };
+    list.push(entry);
+  }
+  if (result === "win") entry.wins += 1;
+  else if (result === "loss") entry.losses += 1;
+  else if (result === "tie") entry.ties += 1;
+  if (personalBestCandidate != null && (entry.personalBest == null || personalBestCandidate < entry.personalBest)) {
+    entry.personalBest = personalBestCandidate;
+  }
+  entry.lastPlayed = new Date().toISOString();
+
+  const sorted = sortLeaderboard(list);
+  fs.writeFileSync(filePath, JSON.stringify(sorted, null, 2));
+  return sorted;
 }
