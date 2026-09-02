@@ -53,6 +53,36 @@ takes every game in progress with it.
 > HTTPS page refuses to open a plaintext `ws://` connection. Getting this wrong
 > is the single most common "it works locally but not deployed" cause.
 
+### Cloudflare tunnel (no account, no card — for playing tonight, not for shipping)
+
+Skips hosting entirely: your own machine keeps running the server, and Cloudflare
+hands you a public HTTPS address that forwards to it.
+
+```bash
+brew install cloudflared   # once
+npm run play:online        # starts the server + the tunnel together
+```
+
+It prints a URL like `https://calgary-lean-epic-kid.trycloudflare.com`. Everyone
+(including you) puts that in the lobby's **SERVER** field — the host part alone is
+enough, it'll resolve to `wss://`. Then create a room and share the 4-letter code
+as usual.
+
+What you're trading away:
+
+- **The URL is different every run**, so it can't be baked into a build with
+  `VITE_MP_SERVER_URL` — it goes in the SERVER field each session.
+- **It dies when you close the terminal**, and your machine has to stay awake for
+  the whole game. Sleep the laptop and everyone drops.
+- **All traffic runs through your home connection**, so your upload speed is the
+  ceiling. Fine for a card game's tiny JSON messages.
+- **Anyone with the URL can reach that server** while it's up. There's no auth —
+  the only thing protecting a game is that room codes aren't guessable. Not a
+  concern for a few hours with friends; not something to leave running.
+
+Use it to confirm cross-network play works and to actually play. Move to a real
+host when you want an address that outlives the terminal.
+
 ### Railway / Render
 
 Both auto-detect Node. Set the start command to `npm run server`. Same rule

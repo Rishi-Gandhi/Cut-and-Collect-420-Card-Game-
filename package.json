@@ -10,6 +10,8 @@
     "server": "node server/index.js",
     "dev:all": "concurrently -k \"npm:server\" \"npm:dev\"",
     "dev:lan": "concurrently -k \"npm:server\" \"vite --host\"",
+    "tunnel": "cloudflared tunnel --url http://localhost:8787",
+    "play:online": "concurrently -k \"npm:server\" \"npm:tunnel\"",
     "build": "vite build",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"npm:server\" \"vite\" \"wait-on tcp:5173 && electron .\"",
