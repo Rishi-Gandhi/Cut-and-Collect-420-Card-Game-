@@ -4,3 +4,4 @@ release/
 .DS_Store
 cut-and-collect-project/leaderboard.json
 .claude/
+.env

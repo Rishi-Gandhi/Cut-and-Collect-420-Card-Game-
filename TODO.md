@@ -7,7 +7,11 @@ Captured for later — nothing here is being worked on yet.
   ~~style)~~ — done. A TURN TIMER picker on the home screen (Off/15s/8s) starts a
   countdown once it's the human's turn; hitting 0 auto-plays a passive card for them
   (lowest legal, but it'll still grab a 10 that's on the table) so a stalled human
-  doesn't hold up the bots.
+  doesn't hold up the bots. Later extended to **multiplayer**, where the clock is run by
+  the server instead of the client — otherwise each player's device would drift and
+  several could race to auto-play the same seat. Only the host's pick applies (one clock
+  per room, shown in the lobby), and everyone can see the countdown ticking under
+  whoever's turn it is, not just their own.
 - ~~Adjustable bot difficulty (easy/hard), by tuning how often the AI plays~~
   ~~optimally~~ — done, as three levels (Easy/Normal/Hard) rather than two, with Normal
   matching the original always-on behavior so existing games aren't affected by default.
@@ -39,15 +43,42 @@ Captured for later — nothing here is being worked on yet.
   loops for each screen (mellower on Home, brighter on End), same real-file override
   option via `public/sounds/home-music.mp3` / `end-music.mp3`. Also tried a third loop
   for the Game screen — too much on top of the card-flip/point-scored sounds, so that
-  one was pulled back out.
+  one was pulled back out. Later grew a third loop for the multiplayer **lobby**:
+  minor-key and deliberately unresolved so waiting for people to join feels like
+  something's about to happen, rather than the settled Home loop. Override via
+  `public/sounds/lobby-music.mp3`. Still nothing during a hand.
 
 ## Multiplayer / social
 - ~~Chat room for players to message each other during a game, just for fun~~ — done,
-  a side-column chat panel on the Game screen (name + team + message). Local-only for
-  now since only the human seat is a real player — bots don't chat — but it's wired up
-  and ready for when real players fill the other seats.
-- Real multiplayer — other humans instead of bots for Players 2–6
-- Semi-multiplayer — a mix of some human players and some bots
+  a side-column chat panel on the Game screen (name + team + message). Now routed
+  through the multiplayer server, so it's a real channel between real players; in Solo
+  it renders disabled (the bots aren't much for conversation).
+- ~~Real multiplayer — other humans instead of bots for Players 2–6~~ — done. A SOLO /
+  MULTIPLAYER picker on the home screen; multiplayer goes through a lobby where you
+  create a room (4-letter code) or join one. An authoritative Node WebSocket server
+  (`server/index.js`) owns the game state and only ever sends each player their own
+  hand — opponents' cards never reach the client. Game rules were extracted to
+  `shared/game-rules.js` so client and server run the exact same code.
+- ~~Semi-multiplayer — a mix of some human players and some bots~~ — done, and it's the
+  default rather than a separate mode: any seat nobody joins is played by a bot, so the
+  host can start without a full table. A *non-host* who disconnects is taken over by a
+  bot and the table plays on; the **host** leaving ends the game for everyone (they're
+  the only seat that can deal the next hand), and the others get a "game has ended"
+  screen rather than a silent freeze.
+- Reconnect to a game in progress — right now leaving hands your seat to a bot for good
+- Spectator mode for a full room
+- Let the host hand off host duties before leaving, so one person quitting doesn't have
+  to end the table's night
+
+## Match results
+- ~~A multiplayer end screen that's about the match, not a personal record~~ — done.
+  A 420 in multiplayer now ends on a `MatchSummary` screen instead of the solo
+  leaderboard one: winning team, hand number, cut suit, who was forced into the first
+  cut, and which individual player captured each 10 — shown for both teams, winner
+  card first. Losers get the same breakdown, not a dead end. Multiplayer results are
+  deliberately **not** written to the leaderboard, which stays a solo-progress record.
+- Carry stats across a whole session, not just the final hand (most 10's over the
+  night, most first cuts, etc.) — needs the server to accumulate per-room history
 
 ## Leaderboard
 - ~~Track each player's overall win/loss/tie record across all time, not just per-win~~
@@ -57,5 +88,14 @@ Captured for later — nothing here is being worked on yet.
   Ranked by personal best first, net wins as a fallback for players without one yet.
 
 ## Distribution
-- Auto-updater for the desktop app, for if it's ever shared with others
+- ~~Auto-updater for the desktop app, for if it's ever shared with others~~ — done,
+  `electron-updater` against GitHub Releases, with a quiet home-screen banner that
+  offers "Restart & Update" once a download finishes. `npm run release` builds and
+  uploads. **Caveat:** macOS refuses to install an unsigned update, so on Mac the
+  download succeeds and the install silently no-ops until the app is code-signed
+  (Apple Developer account, $99/yr) — Windows/Linux update fine unsigned. Full
+  process and the signing steps are in `RELEASING.md`.
+- Deploy the multiplayer server somewhere permanent (Fly.io steps in `RELEASING.md`)
+  and rebuild with `VITE_MP_SERVER_URL` pointed at it — until then multiplayer only
+  works against a locally-run `npm run server`.
 - Package it as a real distributable app via TestFlight

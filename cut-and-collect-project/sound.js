@@ -14,6 +14,7 @@ const SOUND_FILES = {
   lose: "./sounds/lose-fanfare.mp3",
   tie: "./sounds/tie-fanfare.mp3",
   homeMusic: "./sounds/home-music.mp3",
+  lobbyMusic: "./sounds/lobby-music.mp3",
   endMusic: "./sounds/end-music.mp3",
 };
 
@@ -187,6 +188,16 @@ const END_CHORD_LOOP = [
   [392.0, 493.88, 587.33], // G major
   [261.63, 329.63, 392.0], // C major — resolves "home" twice, feels triumphant
 ];
+/* Lobby: minor-key and deliberately unresolved — it never lands back on its
+   own root, which reads as "something is about to happen" rather than the
+   settled, sit-here-as-long-as-you-like feel of the Home loop. Slightly faster
+   step than Home too, for a bit more forward pull while people file in. */
+const LOBBY_CHORD_LOOP = [
+  [293.66, 349.23, 440.0],  // D minor
+  [233.08, 293.66, 349.23], // B♭ major
+  [349.23, 440.0, 523.25],  // F major
+  [261.63, 329.63, 392.0],  // C major — turns the loop over without resolving
+];
 
 let musicIntervalId = null;
 let musicAudioEl = null;
@@ -227,6 +238,10 @@ function startMusic(fileKey, chords, stepSeconds, peakGain, fileVolume) {
 
 export function startHomeMusic() {
   startMusic("homeMusic", HOME_CHORD_LOOP, 2.8, 0.04, 0.35);
+}
+
+export function startLobbyMusic() {
+  startMusic("lobbyMusic", LOBBY_CHORD_LOOP, 2.4, 0.04, 0.35);
 }
 
 export function startEndMusic() {

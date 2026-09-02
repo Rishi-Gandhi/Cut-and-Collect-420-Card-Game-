@@ -13,10 +13,12 @@ changes needed, just add the file and reload the app.
   lose-fanfare.mp3     — played when the other team wins a hand
   tie-fanfare.mp3      — played on an early-finish tie
   home-music.mp3       — looped quietly on the Home (start) screen
+  lobby-music.mp3      — looped quietly on the multiplayer lobby (the room
+                         code / waiting-for-players screen)
   end-music.mp3        — looped quietly on the End (victory) screen
 
-Neither music track plays during a hand — only on those two screens, and
-switching screens swaps one loop for the other.
+No music track plays during a hand — only on those three screens, and moving
+between them swaps one loop for the other.
 
 .mp3 or .wav both work. Keep the one-shot sounds short (well under a second
 for card flip/first cut/point scored, a couple seconds for the fanfares)

@@ -13,3 +13,18 @@ contextBridge.exposeInMainWorld("leaderboardAPI", {
   load: () => ipcRenderer.invoke("leaderboard:load"),
   save: (entry) => ipcRenderer.invoke("leaderboard:save", entry),
 });
+
+/* Auto-update surface. onStatus registers a listener for the progress events
+   main.js pushes (checking -> available -> downloading -> ready), and returns
+   an unsubscribe function so React effects can clean up after themselves.
+   Note we deliberately re-wrap the callback rather than handing the raw IPC
+   event to the page — the page should never get a handle on ipcRenderer. */
+contextBridge.exposeInMainWorld("updateAPI", {
+  check: () => ipcRenderer.invoke("update:check"),
+  install: () => ipcRenderer.invoke("update:install"),
+  onStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("update:status", listener);
+    return () => ipcRenderer.removeListener("update:status", listener);
+  },
+});

@@ -1,9 +1,11 @@
 import electron from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import electronUpdater from "electron-updater";
 import { readLeaderboard, recordResult } from "../leaderboard-store.js";
 
 const { app, BrowserWindow, ipcMain } = electron;
+const { autoUpdater } = electronUpdater;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // In dev, the Vite dev server is already running (started alongside Electron —
@@ -48,8 +50,71 @@ function createWindow() {
 ipcMain.handle("leaderboard:load", () => readLeaderboard(getLeaderboardPath()));
 ipcMain.handle("leaderboard:save", (event, payload) => recordResult(getLeaderboardPath(), payload));
 
+/* ---------- auto-update ----------
+   Checks GitHub Releases (configured under "build.publish" in package.json) for
+   a build with a higher version than this one, downloads it in the background,
+   and installs it on the next quit.
+
+   Two things worth knowing before relying on this:
+
+   1. It only runs in a packaged app. In dev there's no update feed and no
+      installed copy to replace, so we skip it entirely rather than log errors.
+
+   2. macOS requires the app to be **code-signed** for updates to install.
+      Squirrel.Mac refuses to swap in an unsigned bundle, so on an unsigned
+      build the download succeeds and the install silently no-ops. Everything
+      here is wired and correct — it starts working the moment signing is added
+      (see RELEASING.md). Windows and Linux update fine unsigned.
+
+   Update progress is forwarded to the renderer so the UI can surface it; the
+   window is looked up lazily since updates can land after it's created. */
+function sendToRenderer(channel, payload) {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function initAutoUpdate() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => sendToRenderer("update:status", { state: "checking" }));
+  autoUpdater.on("update-available", (info) =>
+    sendToRenderer("update:status", { state: "available", version: info?.version })
+  );
+  autoUpdater.on("update-not-available", () => sendToRenderer("update:status", { state: "current" }));
+  autoUpdater.on("download-progress", (p) =>
+    sendToRenderer("update:status", { state: "downloading", percent: Math.round(p?.percent ?? 0) })
+  );
+  autoUpdater.on("update-downloaded", (info) =>
+    sendToRenderer("update:status", { state: "ready", version: info?.version })
+  );
+  autoUpdater.on("error", (err) =>
+    // a failed update check should never be fatal — the game still plays fine
+    sendToRenderer("update:status", { state: "error", message: String(err?.message || err) })
+  );
+
+  autoUpdater.checkForUpdates().catch(() => {});
+}
+
+// let the renderer trigger a check, and apply a downloaded update on demand
+ipcMain.handle("update:check", async () => {
+  if (!app.isPackaged) return { state: "dev" };
+  try {
+    await autoUpdater.checkForUpdates();
+    return { state: "checking" };
+  } catch (err) {
+    return { state: "error", message: String(err?.message || err) };
+  }
+});
+ipcMain.handle("update:install", () => {
+  if (app.isPackaged) autoUpdater.quitAndInstall();
+});
+
 app.whenReady().then(() => {
   createWindow();
+  initAutoUpdate();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

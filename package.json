@@ -7,14 +7,20 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "dev:all": "concurrently -k \"npm:server\" \"npm:dev\"",
+    "dev:lan": "concurrently -k \"npm:server\" \"vite --host\"",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
-    "package": "vite build && electron-builder"
+    "electron:dev": "concurrently -k \"npm:server\" \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "package": "vite build && electron-builder",
+    "release": "vite build && electron-builder --publish always"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
@@ -28,8 +34,36 @@
     "appId": "com.rishigandhi.cutandcollect",
     "productName": "Cut & Collect",
     "icon": "build/icon.png",
-    "files": ["dist/**/*", "electron/**/*", "leaderboard-store.js", "package.json"],
-    "directories": { "output": "release" },
-    "mac": { "target": "dir" }
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "shared/**/*",
+      "leaderboard-store.js",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Rishi-Gandhi",
+        "repo": "Cut-and-Collect-420-Card-Game-"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.card-games",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Game"
+    }
   }
 }
