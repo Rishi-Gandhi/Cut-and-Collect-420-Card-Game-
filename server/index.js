@@ -21,6 +21,9 @@
    ------------------------------------------------------------------------ */
 
 import { createServer } from "node:http";
+import { createReadStream, stat } from "node:fs";
+import { dirname, extname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
   SUITS,
@@ -393,6 +396,132 @@ function handleDisconnect(client) {
   broadcast(room);
 }
 
+/* ---------- serving the game itself ----------
+   The server hands out the built client as well as running the games, and that
+   is the whole reason a friend can just be sent a link.
+
+   Serving both from one origin means the page and the WebSocket share a host,
+   so the client's existing "derive the server from whatever host served this
+   page" logic resolves correctly with no configuration — the same rule that
+   makes LAN play work. Split across two origins (Vite on 5173, this on 8787)
+   they'd have to be tunnelled separately and the address typed in by hand.
+
+   This is deliberately minimal — no compression, no ETags. It's serving a
+   handful of files to a handful of players. */
+const CLIENT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist");
+
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/* Told to build first, rather than a bare 404 — a blank page here is otherwise
+   indistinguishable from the tunnel being broken, which is a miserable thing to
+   debug while friends are waiting. */
+const NO_BUILD_PAGE = `<!doctype html><meta charset="utf-8">
+<title>Cut &amp; Collect — not built yet</title>
+<body style="font-family:system-ui;background:#0f140f;color:#EDE6D3;padding:3rem;line-height:1.6">
+<h1 style="color:#E7C878">The server is running, but the game hasn't been built.</h1>
+<p>Run this once, then reload:</p>
+<pre style="background:#000;padding:1rem;border-radius:8px;color:#7CFC8A">npm run build</pre>
+<p style="color:#8fa595">The multiplayer server is fine — it just has no client to hand you.</p>
+</body>`;
+
+function serveClient(req, urlPath, res) {
+  // Everything unknown falls back to index.html: the client is a single page
+  // that does its own screen switching, so there are no server-side routes.
+  let rel = decodeURIComponent(urlPath);
+  if (rel === "/" || !extname(rel)) rel = "/index.html";
+
+  const filePath = resolve(CLIENT_DIR, "." + rel);
+
+  // Refuse anything that escapes the build directory. This listener is exposed
+  // to the internet through the tunnel, so a "../../" in the path must not be
+  // able to read arbitrary files off the machine.
+  if (filePath !== CLIENT_DIR && !filePath.startsWith(CLIENT_DIR + sep)) {
+    res.writeHead(403, { "content-type": "text/plain" });
+    res.end("Forbidden");
+    return;
+  }
+
+  stat(filePath, (err, info) => {
+    if (err || !info.isFile()) {
+      if (rel === "/index.html") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(NO_BUILD_PAGE);
+        return;
+      }
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+
+    const type = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
+    // Vite fingerprints asset filenames, so those are safe to cache hard;
+    // index.html must not be, or a rebuild would keep serving the old bundle.
+    const cache = rel.startsWith("/assets/")
+      ? "public, max-age=31536000, immutable"
+      : "no-cache";
+
+    /* Range support matters here specifically because of the audio. Answering
+       every request with the whole file means a browser has to finish
+       downloading a music track before it can begin playing it — survivable on
+       localhost, painful over a tunnel where the ceiling is a home upload link.
+       With ranges it streams, and starts within a second regardless of size. */
+    const range = req.headers.range;
+    const m = range && /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (m) {
+      let start = m[1] === "" ? null : Number(m[1]);
+      let end = m[2] === "" ? null : Number(m[2]);
+      if (start === null) {
+        // "bytes=-500" means the *last* 500 bytes, not from zero
+        start = Math.max(0, info.size - (end || 0));
+        end = info.size - 1;
+      } else {
+        end = end === null ? info.size - 1 : Math.min(end, info.size - 1);
+      }
+      if (start > end || start >= info.size) {
+        res.writeHead(416, { "content-range": `bytes */${info.size}` });
+        res.end();
+        return;
+      }
+      res.writeHead(206, {
+        "content-type": type,
+        "content-length": end - start + 1,
+        "content-range": `bytes ${start}-${end}/${info.size}`,
+        "accept-ranges": "bytes",
+        "cache-control": cache,
+      });
+      createReadStream(filePath, { start, end }).pipe(res);
+      return;
+    }
+
+    res.writeHead(200, {
+      "content-type": type,
+      "content-length": info.size,
+      "accept-ranges": "bytes",
+      "cache-control": cache,
+    });
+    createReadStream(filePath).pipe(res);
+  });
+}
+
 /* ---------- wiring ---------- */
 /* A real HTTP server underneath the WebSocket one.
 
@@ -403,7 +532,8 @@ function handleDisconnect(client) {
    client. So: plain HTTP for health, upgraded to WebSocket for the game. */
 const httpServer = createServer((req, res) => {
   const url = (req.url || "/").split("?")[0];
-  if (url === "/" || url === "/health") {
+
+  if (url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -416,8 +546,8 @@ const httpServer = createServer((req, res) => {
     );
     return;
   }
-  res.writeHead(404, { "content-type": "text/plain" });
-  res.end("Not found");
+
+  serveClient(req, url, res);
 });
 
 const wss = new WebSocketServer({ server: httpServer });

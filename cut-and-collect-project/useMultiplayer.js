@@ -36,11 +36,26 @@ export function defaultServerUrl() {
   const configured = import.meta.env?.VITE_MP_SERVER_URL;
   if (configured) return configured;
   if (typeof window === "undefined") return `ws://localhost:${DEFAULT_PORT}`;
-  const { protocol, hostname } = window.location;
+
+  const { protocol, hostname, host } = window.location;
   if (!hostname || protocol === "file:") return `ws://localhost:${DEFAULT_PORT}`;
+
   // an https page may only open wss:// — browsers block mixed-content sockets
   const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
-  return `${wsProtocol}//${hostname}:${DEFAULT_PORT}`;
+
+  /* Which port depends on *what served this page*, and the two cases differ:
+
+     - In dev, Vite serves it on 5173 while the game server is a separate
+       process on 8787, so the port has to be named explicitly.
+     - In a build, the game server serves the page itself, so the socket lives
+       on whatever port the page already came from. Naming 8787 there breaks
+       exactly the case this is for: behind a tunnel or a real host the page
+       arrives over 443, and ws://host:8787 goes nowhere.
+
+     `host` (unlike `hostname`) already carries the port when it's non-default,
+     which is precisely the "same place this page came from" answer. */
+  if (import.meta.env?.DEV) return `${wsProtocol}//${hostname}:${DEFAULT_PORT}`;
+  return `${wsProtocol}//${host}`;
 }
 
 /* ---------- the player's own override ----------
