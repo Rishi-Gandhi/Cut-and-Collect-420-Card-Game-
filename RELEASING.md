@@ -1,135 +1,63 @@
-# Releasing Cut & Collect
+# Running & sharing Cut & Collect
 
-Two separate things ship, and they ship independently:
+Two different things people mean by "sharing this game", in the order you're
+likely to want them:
 
-| Piece | Where it runs | How it updates |
-|---|---|---|
-| **The desktop app** | Each player's machine | Auto-updater, from GitHub Releases |
-| **The multiplayer server** | One cloud host | You redeploy it |
+1. **Play with friends right now** — they open a link. No install, no accounts.
+2. **Give someone the desktop app** — a real `.dmg`/`.exe` they keep.
 
-The app is the thing that auto-updates. The server is a single long-running
-process that everyone connects to — update it and every player gets the change
-immediately, no download required.
+Start with the first. The second only matters if you want the game living on
+someone's machine rather than in a browser tab.
 
 ---
 
-## 1. Deploying the multiplayer server
-
-The server (`server/index.js`) is a plain Node WebSocket process with one
-dependency (`ws`). It holds rooms in memory, so restarting it drops any games in
-progress — fine for this, and it means no database to run.
-
-It listens on `process.env.PORT`, falling back to 8787, which is the convention
-every platform below expects.
-
-### Fly.io (recommended — generous free allowance, WebSockets work by default)
-
-A `Dockerfile`, `.dockerignore`, and `fly.toml` are already committed, so this
-is the whole process:
+## 1. Playing with friends over the internet
 
 ```bash
-brew install flyctl          # or: curl -L https://fly.io/install.sh | sh
-fly auth signup              # or `fly auth login`
-fly launch --no-deploy       # claims a unique app name and rewrites `app` in fly.toml
-fly deploy
+npm run play:online
 ```
 
-Then confirm it's actually up — the server answers plain HTTP on `/health`
-alongside the WebSocket, precisely so you can check with a browser or curl:
+That starts the game server and a Cloudflare tunnel together, then prints a
+link in a box:
+
+```
+https://survivors-activation-miles-lounge.trycloudflare.com
+```
+
+**Send that link to whoever's playing.** They open it on any device on any
+network — phone, laptop, anything with a browser — type a name, and enter the
+4-letter room code you give them. Nothing to install, nothing to configure: the
+same server that hands out the page also runs the games, so the client works
+out where to connect on its own.
+
+Lost the link, or the banner scrolled past? Print it again:
 
 ```bash
-curl https://<app-name>.fly.dev/health
-# {"ok":true,"service":"cut-and-collect","rooms":0,"players":0,"uptimeSeconds":12}
+npm run link
 ```
 
-Your URL is `https://<app-name>.fly.dev`. For the game, use the WebSocket form:
-`wss://<app-name>.fly.dev`.
-
-The committed `fly.toml` sets `min_machines_running = 1` and disables
-auto-stop. That's deliberate: rooms live in memory, so a machine stopping
-takes every game in progress with it.
-
-> **`wss://`, not `ws://`.** Fly terminates TLS for you, and a browser on an
-> HTTPS page refuses to open a plaintext `ws://` connection. Getting this wrong
-> is the single most common "it works locally but not deployed" cause.
-
-### Cloudflare tunnel (no account, no card — for playing tonight, not for shipping)
-
-Skips hosting entirely: your own machine keeps running the server, and Cloudflare
-hands you a public HTTPS address that forwards to it.
+First run needs the tunnel client, once — it's free and needs no account:
 
 ```bash
-brew install cloudflared   # once
-npm run play:online        # starts the server + the tunnel together
+brew install cloudflared
 ```
 
-It prints a URL like `https://calgary-lean-epic-kid.trycloudflare.com`. Everyone
-(including you) puts that in the lobby's **SERVER** field — the host part alone is
-enough, it'll resolve to `wss://`. Then create a room and share the 4-letter code
-as usual.
+### The catches
 
-What you're trading away:
-
-- **The URL is different every run**, so it can't be baked into a build with
-  `VITE_MP_SERVER_URL` — it goes in the SERVER field each session.
-- **It dies when you close the terminal**, and your machine has to stay awake for
-  the whole game. Sleep the laptop and everyone drops.
-- **All traffic runs through your home connection**, so your upload speed is the
-  ceiling. Fine for a card game's tiny JSON messages.
-- **Anyone with the URL can reach that server** while it's up. There's no auth —
-  the only thing protecting a game is that room codes aren't guessable. Not a
-  concern for a few hours with friends; not something to leave running.
-
-Use it to confirm cross-network play works and to actually play. Move to a real
-host when you want an address that outlives the terminal.
-
-### Railway / Render
-
-Both auto-detect Node. Set the start command to `npm run server`. Same rule
-applies — use the `wss://` form of the URL they give you.
-
-### Pointing the app at the deployed server
-
-`VITE_MP_SERVER_URL` is read at **build time** (that's how Vite env vars work —
-they're inlined into the bundle, not read at runtime). So it must be set before
-you build:
-
-```bash
-cp .env.example .env
-# edit .env:
-#   VITE_MP_SERVER_URL=wss://your-app-name.fly.dev
-npm run release
-```
-
-This sets the **default** every copy of the app starts with. It isn't a hard
-wiring — see below.
-
-### Changing the server without a rebuild
-
-The multiplayer lobby shows a `SERVER` line with a **change** button. Whatever
-is typed there is normalized, saved to that device's `localStorage`, and used
-for every subsequent connection; **Reset** returns to the build-time default.
-
-This exists for three situations the build-time default can't cover:
-
-- **Playing over LAN from the packaged app.** A `.dmg` loads over `file://`,
-  which has no hostname to derive a server from, so it always falls back to
-  `localhost`. Without an override the desktop app can *only* talk to a server
-  on the same machine — not even one across the room. Point it at
-  `192.168.1.42:8787` and it works.
-- **Moving hosts.** Otherwise a new host means a new release for everyone.
-- **Testing a staging server** without disturbing the shipped default.
-
-Input is forgiving: `my-game.fly.dev`, a pasted `https://…` URL, or
-`192.168.1.42:8787` all work. The protocol is inferred rather than typed —
-LAN and localhost addresses get `ws://` (plus port 8787 if omitted), everything
-else gets `wss://`, because a browser on an HTTPS page refuses a plaintext
-socket and a bare LAN box has no certificate for an encrypted one. The lobby
-shows the resulting URL before you commit it.
+- **A new link every run.** Restarting mints a new hostname. Reusing an old one
+  fails as Cloudflare error 1033 / HTTP 530, which looks like a broken tunnel
+  but only means "that address doesn't exist any more".
+- **It lives as long as the terminal does.** Ctrl+C ends it, and your machine
+  has to stay awake — sleeping the laptop drops everyone.
+- **Traffic runs through your home connection**, so your upload speed is the
+  ceiling. Irrelevant for a card game's small messages.
+- **Anyone with the link can reach the server** while it's up. There's no login;
+  unguessable room codes are the only thing gating a game. Fine for an evening
+  with friends, not something to leave running unattended.
 
 ---
 
-## 2. Releasing the desktop app
+## 2. Sharing the desktop app
 
 ### One-time setup
 
@@ -220,6 +148,66 @@ signed.
 
 ---
 
+## Fallbacks
+
+None of this is needed for the link above. Reach for it only if that doesn't fit.
+
+### Same-wifi play, without a tunnel
+
+```bash
+npm run dev:lan
+```
+
+Others on your network open `http://<your-mac-ip>:5173` in a browser — find the
+IP with `ipconfig getifaddr en0`. No internet round-trip, but it reaches only
+the same network.
+
+### Pointing a client at a different server
+
+The lobby has a `SERVER` line with a **change** button. What you type is saved
+on that device and used for every connection after; **Reset** returns to the
+default.
+
+Two situations actually need it:
+
+- **The packaged desktop app.** It loads over `file://`, which has no hostname
+  to derive a server address from, so it falls back to `localhost` and can't
+  reach another machine — not even on the same wifi — until told where to look.
+  Browsers never hit this, because the page itself answers the question.
+- **Testing against another server** without disturbing the default.
+
+Input is forgiving: `my-game.fly.dev`, a pasted `https://…` URL, or
+`192.168.1.42:8787`. The protocol is worked out for you — local addresses get
+`ws://` (plus port 8787 if omitted), everything else `wss://` — and the lobby
+shows the resulting address before you commit to it.
+
+### A permanent address
+
+The tunnel dies with the terminal. For a URL that doesn't, the server has to run
+somewhere always-on: any host that runs Node and allows WebSockets (Railway,
+Render, Fly, a VPS).
+
+`server/index.js` is already built for that — it reads `process.env.PORT`, binds
+`0.0.0.0`, serves the built client out of `dist/`, and answers `GET /health`
+with JSON so platform health checks pass. Run `npm run build` first, then start
+it with `npm run server`.
+
+No deploy config is committed, because none is in use. A `Dockerfile` and
+`fly.toml` existed briefly and were removed as clutter; `git log --diff-filter=D
+-- Dockerfile fly.toml` will find them if they'd save you time later.
+
+If you do host it permanently, bake the address in so nobody has to type it:
+
+```bash
+cp .env.example .env
+# VITE_MP_SERVER_URL=wss://your-server.example.com
+npm run package
+```
+
+That sets only the *default* — the SERVER field can still override it.
+
+---
+
 ## Local development
 
 ```bash
@@ -227,9 +215,13 @@ npm run dev:all       # multiplayer server + Vite, in one command
 npm run electron:dev  # same, plus the desktop shell
 ```
 
-With no `.env`, the client connects to `ws://localhost:8787`, which is what
+With no `.env`, a dev client connects to `ws://localhost:8787`, which is what
 `npm run server` starts. Two browser tabs at http://localhost:5173 are enough to
 test a real two-player game.
+
+After `npm run build`, `npm run server` serves the built game at
+http://localhost:8787 with no Vite involved — exactly what people reach through
+the tunnel.
 
 ### Which build command to use
 
@@ -241,12 +233,5 @@ test a real two-player game.
 
 `package` passes electron-builder's `--dir`, which skips installer creation and
 builds only for this machine's architecture. The other two build every target in
-the `build.mac` config — which means downloading a second Electron binary for
-x64 and writing four ~165MB artifacts, hence the minutes. Reach for them only
-when you need something shippable.
-
-**Heads up:** a packaged app has no multiplayer server unless you give it one.
-Built with no `.env`, it falls back to `ws://localhost:8787` — fine on your own
-machine with `npm run server` running, useless to anyone you send the dmg to.
-Set `VITE_MP_SERVER_URL` to a deployed server (section 1) before building
-anything you intend to share.
+the `build.mac` config — downloading a second Electron binary for x64 and
+writing four ~165MB artifacts, hence the minutes.

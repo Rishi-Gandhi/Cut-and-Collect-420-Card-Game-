@@ -12,6 +12,7 @@
     "dev:lan": "concurrently -k \"npm:server\" \"vite --host\"",
     "tunnel": "node scripts/tunnel.mjs",
     "play:online": "concurrently -k \"npm:server\" \"npm:tunnel\"",
+    "link": "node scripts/link.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"npm:server\" \"vite\" \"wait-on tcp:5173 && electron .\"",

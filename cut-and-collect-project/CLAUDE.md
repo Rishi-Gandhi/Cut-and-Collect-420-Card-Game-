@@ -58,6 +58,14 @@ out illegal cards precisely so the UI can't disagree with what the server will a
   from live `view`. That's deliberate: the host clicking through closes the room, and
   the snapshot is what lets everyone else still see results instead of a dead end.
   Per-seat credit comes from `firstCutSeat` / `tensBySeat` in the shared state.
+- **Two separate reasons music can fail to start**, both fixed in `sound.js` and both
+  invisible on localhost. The mp3-vs-synthesized choice depends on an async HEAD probe,
+  so reading it synchronously loses a race on first paint and wrongly picks the synth
+  fallback — `startMusic` waits on the probe promise instead. And browsers refuse audio
+  before a user gesture, so the first attempt is rejected outright; a rejection now arms
+  a one-shot retry on the next click or keypress. Testing either of these requires a
+  browser with its real autoplay policy — passing `--autoplay-policy=no-user-gesture-required`
+  hides the second bug completely.
 - `GameTable` rotates seats so the local player is always the bottom seat
   (`displayIndex`), since online you may be any seat number.
 - **Finding the server is three-tiered**, in `useMultiplayer.js`: a per-device override
@@ -71,11 +79,23 @@ out illegal cards precisely so the UI can't disagree with what the server will a
 - The connect path reads the URL from a **ref**, not the state value. `connect()` is a
   `useCallback`; closing over the state would keep dialling the previous server after a
   change.
-- The server answers plain HTTP on `/` and `/health` alongside the WebSocket. Hosting
-  platforms health-check over HTTP and restart anything that rejects those requests —
-  which a WebSocket-only listener does. It also binds `0.0.0.0`, since binding loopback
-  inside a container makes the process unreachable while looking fine in the logs.
-- `Dockerfile` / `fly.toml` deploy the **server only**. See `RELEASING.md`.
+- The server answers plain HTTP alongside the WebSocket: `/health` returns JSON, and
+  everything else serves the client (below). Hosting platforms health-check over HTTP
+  and restart anything that rejects those requests — which a WebSocket-only listener
+  does. It also binds `0.0.0.0`, since binding loopback inside a container makes the
+  process unreachable while looking fine in the logs.
+- **The server also serves the built client** out of `dist/`, which is what makes
+  "send a friend a link" work: page and WebSocket share an origin, so the client's
+  derive-from-page-host rule lands on the right address with no configuration. That
+  rule uses the page's *own port* in a build (`window.location.host`) and only names
+  8787 in dev, where Vite serves the page from a different origin — naming 8787 in a
+  build breaks every case where the page arrives over 443.
+- The static handler supports **Range requests**, because otherwise a browser has to
+  finish downloading a music file before playing a note of it — survivable locally,
+  not over a tunnel where `lobby-music.mp3` is 35MB. It also refuses any path that
+  escapes `dist/`; this listener is internet-facing whenever the tunnel is up.
+- No deploy config is committed. `npm run play:online` (server + Cloudflare tunnel)
+  is the sharing path; see `RELEASING.md`.
 
 ## Other notes
 

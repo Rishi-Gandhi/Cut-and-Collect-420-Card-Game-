@@ -82,7 +82,10 @@ child.on("exit", (code) => {
   cleanup();
   process.exit(code ?? 0);
 });
-for (const sig of ["SIGINT", "SIGTERM"]) {
+/* SIGHUP is in the list because closing a terminal window sends that rather
+   than SIGINT — and without it the URL file outlives the tunnel, so the next
+   `npm run link` hands out a dead address. */
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(sig, () => {
     cleanup();
     child.kill(sig);

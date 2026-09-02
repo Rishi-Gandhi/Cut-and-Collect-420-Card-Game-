@@ -29,6 +29,11 @@ Captured for later — nothing here is being worked on yet.
   team catches on, they get to choose what card you play next
 
 ## Presentation
+- Compress the audio. `public/sounds/` is 41MB, nearly all of it `lobby-music.mp3` at
+  35MB, and every one of those bytes now travels twice: into each desktop build, and
+  over the host's home upload link to every friend who opens the share link. A looping
+  ambient pad does not need 35MB — re-encoding to ~96kbps mono would put it near 3MB
+  with no audible loss at background volume.
 - ~~Sound effects~~ — done, and grown past the original scope: new-hand whoosh, card
   flip, a distinct first-cut sting, a point-scored chime, win/lose/tie fanfare. All
   synthesized with the Web Audio API in `sound.js`, no audio asset files needed. Drop
@@ -95,7 +100,17 @@ Captured for later — nothing here is being worked on yet.
   download succeeds and the install silently no-ops until the app is code-signed
   (Apple Developer account, $99/yr) — Windows/Linux update fine unsigned. Full
   process and the signing steps are in `RELEASING.md`.
-- Deploy the multiplayer server somewhere permanent (Fly.io steps in `RELEASING.md`)
-  and rebuild with `VITE_MP_SERVER_URL` pointed at it — until then multiplayer only
-  works against a locally-run `npm run server`.
+- ~~Let people on other networks play, not just the same wifi~~ — done, and without
+  hosting anything. `npm run play:online` runs the server plus a Cloudflare quick
+  tunnel, and the server now serves the built client too, so there's a single link to
+  send: the page and the WebSocket share an origin, which means a friend opens it and
+  plays with nothing to install or configure. Costs nothing and needs no account. The
+  trade is that your machine is the server — the link dies with the terminal and
+  changes every run.
+- A permanent address, so the link doesn't change and your laptop isn't the server.
+  `server/index.js` is already shaped for it (reads `PORT`, binds `0.0.0.0`, serves
+  `dist/`, has a `/health` endpoint) — it just needs a host. A `Dockerfile`/`fly.toml`
+  were written and then deleted as unused; `git log --diff-filter=D` will find them.
+- Some way to gate a room beyond an unguessable code. While a tunnel is up, anyone
+  with the link can reach the server.
 - Package it as a real distributable app via TestFlight
