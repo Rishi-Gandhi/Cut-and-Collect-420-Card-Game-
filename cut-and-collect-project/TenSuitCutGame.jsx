@@ -18,7 +18,7 @@ import { styles, GLOBAL_STYLE } from "./styles.js";
 import { GameTable } from "./GameTable.jsx";
 import { MatchSummary } from "./MatchSummary.jsx";
 import { UpdateBanner } from "./UpdateBanner.jsx";
-import { useMultiplayer } from "./useMultiplayer.js";
+import { useMultiplayer, normalizeServerUrl } from "./useMultiplayer.js";
 import {
   unlockAudio,
   playNewGame,
@@ -359,6 +359,81 @@ function HomeScreen({
    Create a room and read out the 4-letter code, or type someone else's. Seats
    nobody claims stay bots, so the host can start whenever they like rather
    than waiting for a full table. */
+/* Which server this device talks to.
+
+   Collapsed to one line by default, because most people never need it: a build
+   made with VITE_MP_SERVER_URL already points at the deployed server. It exists
+   for the two cases the build-time default can't handle — a packaged .app
+   (file://, so it always falls back to localhost) that needs to reach a server
+   on the network, and moving hosts without shipping a new release. */
+function ServerPicker({ mp }) {
+  const { serverUrl, setServerUrl, resetServerUrl, defaultServerUrl, status } = mp;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(serverUrl);
+
+  // preview the normalization live, so the ws:// vs wss:// guess is visible
+  // *before* committing rather than as a mystery failure afterwards
+  const preview = normalizeServerUrl(draft);
+  const isCustom = serverUrl !== defaultServerUrl;
+
+  function save() {
+    if (!preview) return;
+    setServerUrl(draft);
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <div style={styles.serverRow}>
+        <span style={styles.serverLabel}>SERVER</span>
+        <span style={styles.serverUrlText}>{serverUrl}</span>
+        {isCustom && <span style={styles.serverCustomTag}>CUSTOM</span>}
+        <button style={styles.serverEditBtn} onClick={() => { setDraft(serverUrl); setEditing(true); }}>
+          change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.serverEditWrap}>
+      <span style={styles.serverLabel}>SERVER ADDRESS</span>
+      <input
+        style={styles.serverInput}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        placeholder="my-game.fly.dev  or  192.168.1.42:8787"
+        autoFocus
+        spellCheck={false}
+      />
+      {preview && preview !== draft.trim() && (
+        <div style={styles.serverPreview}>connects to {preview}</div>
+      )}
+      <div style={styles.serverHint}>
+        A deployed address gets <b>wss://</b>; a LAN address gets <b>ws://</b> and port 8787.
+        {status === "connected" && " Changing this drops the current connection."}
+      </div>
+      <div style={styles.serverBtnRow}>
+        <button style={{ ...styles.dealBtn, ...(preview ? {} : styles.dealBtnDisabled) }} disabled={!preview} onClick={save}>
+          Save
+        </button>
+        <button style={styles.trashBtn} onClick={() => setEditing(false)}>Cancel</button>
+        <button
+          style={{ ...styles.trashBtn, ...(isCustom ? {} : styles.dealBtnDisabled) }}
+          disabled={!isCustom}
+          onClick={() => { setDraft(resetServerUrl()); setEditing(false); }}
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit, onEnterGame, onBack }) {
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -411,8 +486,8 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
             <div style={styles.lobbyStatus}>
               <span style={{ ...styles.connDot, background: dotColor }} />
               {status === "connected" ? "connected" : status === "connecting" ? "connecting…" : "not connected"}
-              {" · "}{serverUrl}
             </div>
+            <ServerPicker mp={mp} />
 
             <label style={styles.homeLabel}>HOST A NEW GAME</label>
             <div style={styles.lobbyHint}>

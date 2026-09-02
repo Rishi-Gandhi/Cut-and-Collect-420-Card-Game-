@@ -1,0 +1,13 @@
+# Everything the server image doesn't need. Keeps the build context small —
+# without this, the 35MB of audio in public/ and the whole release/ directory
+# get uploaded to the builder on every deploy.
+node_modules
+release
+dist
+build
+public
+electron
+cut-and-collect-project
+.git
+.env
+*.md

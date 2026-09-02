@@ -60,8 +60,22 @@ out illegal cards precisely so the UI can't disagree with what the server will a
   Per-seat credit comes from `firstCutSeat` / `tensBySeat` in the shared state.
 - `GameTable` rotates seats so the local player is always the bottom seat
   (`displayIndex`), since online you may be any seat number.
-- Server URL comes from `VITE_MP_SERVER_URL`, inlined at **build** time (Vite env vars
-  are not runtime-readable). Defaults to `ws://localhost:8787`. See `RELEASING.md`.
+- **Finding the server is three-tiered**, in `useMultiplayer.js`: a per-device override
+  in `localStorage` (edited from the lobby) beats `VITE_MP_SERVER_URL` inlined at build
+  time, which beats deriving the address from the page's own host. The last of those is
+  what makes browser LAN play work with no configuration; the override exists because a
+  packaged app loads over `file://`, has no host to derive from, and would otherwise be
+  permanently stuck on `localhost`. `normalizeServerUrl()` infers `ws://` vs `wss://`
+  from whether the host is local — getting that backwards is the single most common
+  "works locally, dead when deployed" failure, so it isn't left to the user to type.
+- The connect path reads the URL from a **ref**, not the state value. `connect()` is a
+  `useCallback`; closing over the state would keep dialling the previous server after a
+  change.
+- The server answers plain HTTP on `/` and `/health` alongside the WebSocket. Hosting
+  platforms health-check over HTTP and restart anything that rejects those requests —
+  which a WebSocket-only listener does. It also binds `0.0.0.0`, since binding loopback
+  inside a container makes the process unreachable while looking fine in the logs.
+- `Dockerfile` / `fly.toml` deploy the **server only**. See `RELEASING.md`.
 
 ## Other notes
 

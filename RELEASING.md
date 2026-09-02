@@ -24,26 +24,30 @@ every platform below expects.
 
 ### Fly.io (recommended — generous free allowance, WebSockets work by default)
 
+A `Dockerfile`, `.dockerignore`, and `fly.toml` are already committed, so this
+is the whole process:
+
 ```bash
 brew install flyctl          # or: curl -L https://fly.io/install.sh | sh
 fly auth signup              # or `fly auth login`
-fly launch --no-deploy       # name the app; skip the database prompts
+fly launch --no-deploy       # claims a unique app name and rewrites `app` in fly.toml
 fly deploy
 ```
 
-`fly launch` writes a `fly.toml`. Make sure it has an HTTP service on the
-internal port the server uses:
+Then confirm it's actually up — the server answers plain HTTP on `/health`
+alongside the WebSocket, precisely so you can check with a browser or curl:
 
-```toml
-[http_service]
-  internal_port = 8787
-  force_https = true
-  auto_stop_machines = "suspend"
-  min_machines_running = 1     # keep 1 warm so the first player isn't waiting
+```bash
+curl https://<app-name>.fly.dev/health
+# {"ok":true,"service":"cut-and-collect","rooms":0,"players":0,"uptimeSeconds":12}
 ```
 
-Your URL will be `https://<app-name>.fly.dev`. For the game, use the WebSocket
-form: `wss://<app-name>.fly.dev`.
+Your URL is `https://<app-name>.fly.dev`. For the game, use the WebSocket form:
+`wss://<app-name>.fly.dev`.
+
+The committed `fly.toml` sets `min_machines_running = 1` and disables
+auto-stop. That's deliberate: rooms live in memory, so a machine stopping
+takes every game in progress with it.
 
 > **`wss://`, not `ws://`.** Fly terminates TLS for you, and a browser on an
 > HTTPS page refuses to open a plaintext `ws://` connection. Getting this wrong
@@ -67,8 +71,31 @@ cp .env.example .env
 npm run release
 ```
 
-A shipped app can't be repointed at a different server without a rebuild. If you
-move hosts, that's a new release.
+This sets the **default** every copy of the app starts with. It isn't a hard
+wiring — see below.
+
+### Changing the server without a rebuild
+
+The multiplayer lobby shows a `SERVER` line with a **change** button. Whatever
+is typed there is normalized, saved to that device's `localStorage`, and used
+for every subsequent connection; **Reset** returns to the build-time default.
+
+This exists for three situations the build-time default can't cover:
+
+- **Playing over LAN from the packaged app.** A `.dmg` loads over `file://`,
+  which has no hostname to derive a server from, so it always falls back to
+  `localhost`. Without an override the desktop app can *only* talk to a server
+  on the same machine — not even one across the room. Point it at
+  `192.168.1.42:8787` and it works.
+- **Moving hosts.** Otherwise a new host means a new release for everyone.
+- **Testing a staging server** without disturbing the shipped default.
+
+Input is forgiving: `my-game.fly.dev`, a pasted `https://…` URL, or
+`192.168.1.42:8787` all work. The protocol is inferred rather than typed —
+LAN and localhost addresses get `ws://` (plus port 8787 if omitted), everything
+else gets `wss://`, because a browser on an HTTPS page refuses a plaintext
+socket and a bare LAN box has no certificate for an encrypted one. The lobby
+shows the resulting URL before you commit it.
 
 ---
 

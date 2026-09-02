@@ -134,6 +134,42 @@ export const styles = {
   },
   seatTimerLow: { color: "#E86A6A" },
 
+  /* ---- server address picker (multiplayer lobby) ---- */
+  serverRow: {
+    display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap",
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,
+    padding: "6px 9px", background: "rgba(0,0,0,0.22)", borderRadius: 6,
+    border: "1px solid rgba(255,255,255,0.05)", marginBottom: 4,
+  },
+  serverLabel: { color: "#8fa595", letterSpacing: 1.5, fontSize: 9.5 },
+  serverUrlText: { color: "#cfd9c9", flex: 1, minWidth: 0, overflowWrap: "anywhere" },
+  serverCustomTag: {
+    fontSize: 9, letterSpacing: 1, color: "#1c2118", background: "#E7C878",
+    borderRadius: 3, padding: "1px 4px",
+  },
+  serverEditBtn: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: "#E7C878",
+    background: "none", border: "1px solid #E7C87866", borderRadius: 4,
+    padding: "2px 8px", cursor: "pointer",
+  },
+  serverEditWrap: {
+    display: "flex", flexDirection: "column", gap: 6,
+    padding: "10px", background: "rgba(0,0,0,0.28)", borderRadius: 8,
+    border: "1px solid #E7C87844", marginBottom: 4,
+  },
+  serverInput: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5,
+    padding: "8px 10px", borderRadius: 6, border: "1px solid #3a4a3c",
+    background: "#141a15", color: "#EDE6D3", outline: "none", width: "100%",
+    boxSizing: "border-box",
+  },
+  serverPreview: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#7CFC8A",
+    overflowWrap: "anywhere",
+  },
+  serverHint: { fontSize: 10.5, color: "#8fa595", lineHeight: 1.45 },
+  serverBtnRow: { display: "flex", gap: 6, flexWrap: "wrap" },
+
   trickCard: { position: "absolute", transform: "translate(-50%,-50%)" },
   trickCardWinning: { boxShadow: "0 0 0 2px #7CFC8A, 0 0 14px 3px #7CFC8Aaa", borderRadius: 8 },
   tableCenterNote: {

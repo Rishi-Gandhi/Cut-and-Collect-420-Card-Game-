@@ -20,6 +20,7 @@
       at the same moment.
    ------------------------------------------------------------------------ */
 
+import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import {
   SUITS,
@@ -393,7 +394,33 @@ function handleDisconnect(client) {
 }
 
 /* ---------- wiring ---------- */
-const wss = new WebSocketServer({ port: PORT });
+/* A real HTTP server underneath the WebSocket one.
+
+   `new WebSocketServer({ port })` would listen fine on its own, but it answers
+   ordinary GET requests by rejecting them — which every hosting platform reads
+   as "this process is unhealthy" and restarts in a loop. It also leaves you no
+   way to check whether a deploy is actually alive short of writing a WebSocket
+   client. So: plain HTTP for health, upgraded to WebSocket for the game. */
+const httpServer = createServer((req, res) => {
+  const url = (req.url || "/").split("?")[0];
+  if (url === "/" || url === "/health") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        service: "cut-and-collect",
+        rooms: rooms.size,
+        players: clients.size,
+        uptimeSeconds: Math.round(process.uptime()),
+      })
+    );
+    return;
+  }
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("Not found");
+});
+
+const wss = new WebSocketServer({ server: httpServer });
 
 wss.on("connection", (ws) => {
   const client = { id: nextClientId++, ws, roomCode: null, seat: null };
@@ -418,4 +445,11 @@ wss.on("connection", (ws) => {
   ws.on("error", () => handleDisconnect(client));
 });
 
-console.log(`Cut & Collect multiplayer server listening on ws://localhost:${PORT}`);
+/* 0.0.0.0, not localhost: inside a container, binding to the loopback address
+   makes the process unreachable from outside it — the single most common way a
+   deploy looks healthy in logs and refuses every connection. */
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`Cut & Collect multiplayer server listening on port ${PORT}`);
+  console.log(`  health:    http://localhost:${PORT}/health`);
+  console.log(`  websocket: ws://localhost:${PORT}`);
+});

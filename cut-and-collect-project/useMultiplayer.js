@@ -32,7 +32,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
    Packaged Electron is the exception: it loads over file://, which has no
    hostname to borrow, so that falls back to localhost. */
 const DEFAULT_PORT = 8787;
-function resolveServerUrl() {
+export function defaultServerUrl() {
   const configured = import.meta.env?.VITE_MP_SERVER_URL;
   if (configured) return configured;
   if (typeof window === "undefined") return `ws://localhost:${DEFAULT_PORT}`;
@@ -42,7 +42,61 @@ function resolveServerUrl() {
   const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
   return `${wsProtocol}//${hostname}:${DEFAULT_PORT}`;
 }
-const SERVER_URL = resolveServerUrl();
+
+/* ---------- the player's own override ----------
+   The build-time default above can't cover every case. A packaged desktop app
+   loads over file:// and so always falls back to localhost, which means the
+   .app can't reach a server on someone else's machine — not even on the same
+   wifi — without this. And a build baked against one deployed host would
+   otherwise need a whole new release just to move hosts.
+
+   So the address is editable and remembered per device. */
+const STORAGE_KEY = "cutcollect.serverUrl";
+
+/* Accepts what people actually type — "myapp.fly.dev", a pasted https:// URL,
+   "192.168.1.42:8787" — and turns it into a URL a WebSocket will accept.
+
+   The protocol guess is the important part: ws:// to a remote host fails on an
+   HTTPS page (browsers block mixed content) and is unencrypted regardless,
+   while wss:// to a bare LAN box fails because there's no certificate. Local
+   addresses therefore default to ws://, everything else to wss://. */
+export function normalizeServerUrl(input) {
+  let s = String(input || "").trim();
+  if (!s) return "";
+  s = s.replace(/\/+$/, ""); // trailing slashes break nothing but look wrong when echoed back
+
+  if (/^https:\/\//i.test(s)) return `wss://${s.slice(8)}`;
+  if (/^http:\/\//i.test(s)) return `ws://${s.slice(7)}`;
+  if (/^wss?:\/\//i.test(s)) return s;
+
+  const host = s.split("/")[0].split(":")[0].toLowerCase();
+  const isLocal =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host.endsWith(".local") ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+  // a bare LAN host also needs the port spelled out; a deployed one is behind 443
+  const needsPort = isLocal && !s.includes(":");
+  return `${isLocal ? "ws" : "wss"}://${s}${needsPort ? `:${DEFAULT_PORT}` : ""}`;
+}
+
+function readStoredServerUrl() {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY) || null;
+  } catch {
+    return null; // private windows and locked-down browsers throw rather than return null
+  }
+}
+function writeStoredServerUrl(url) {
+  try {
+    if (url) window.localStorage.setItem(STORAGE_KEY, url);
+    else window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* not being able to remember it is survivable; failing to connect isn't */
+  }
+}
 
 export function useMultiplayer() {
   const [status, setStatus] = useState("idle"); // idle | connecting | connected | closed | error
@@ -55,6 +109,32 @@ export function useMultiplayer() {
      temporarily unhappy — so the UI shows a dead end rather than a toast. */
   const [closedReason, setClosedReason] = useState(null);
   const wsRef = useRef(null);
+
+  /* The address is state so editing it re-renders, and *also* a ref because
+     connect() is a useCallback that would otherwise close over a stale value
+     and keep dialling the previous server after a change. */
+  const [serverUrl, setServerUrlState] = useState(() => readStoredServerUrl() || defaultServerUrl());
+  const serverUrlRef = useRef(serverUrl);
+  serverUrlRef.current = serverUrl;
+
+  const setServerUrl = useCallback((input) => {
+    const normalized = normalizeServerUrl(input);
+    if (!normalized) return null;
+    writeStoredServerUrl(normalized);
+    setServerUrlState(normalized);
+    serverUrlRef.current = normalized;
+    return normalized;
+  }, []);
+
+  /* Back to whatever this build was compiled with — the escape hatch for
+     having typed something wrong and no longer being able to reach anything. */
+  const resetServerUrl = useCallback(() => {
+    const fallback = defaultServerUrl();
+    writeStoredServerUrl(null);
+    setServerUrlState(fallback);
+    serverUrlRef.current = fallback;
+    return fallback;
+  }, []);
 
   /* transient errors ("that's not a legal play") should fade rather than
      stick around and be mistaken for the current state of things */
@@ -87,10 +167,10 @@ export function useMultiplayer() {
     return new Promise((resolve) => {
       let ws;
       try {
-        ws = new WebSocket(SERVER_URL);
+        ws = new WebSocket(serverUrlRef.current);
       } catch {
         setStatus("error");
-        setError(`Couldn't reach the game server at ${SERVER_URL}.`);
+        setError(`Couldn't reach the game server at ${serverUrlRef.current}.`);
         return resolve(false);
       }
       wsRef.current = ws;
@@ -118,7 +198,7 @@ export function useMultiplayer() {
       };
       ws.onerror = () => {
         setStatus("error");
-        setError(`Couldn't reach the game server at ${SERVER_URL}. Is it running?`);
+        setError(`Couldn't reach the game server at ${serverUrlRef.current}. Is it running?`);
         resolve(false);
       };
       ws.onclose = () => {
@@ -161,7 +241,8 @@ export function useMultiplayer() {
   useEffect(() => () => wsRef.current?.close(), []);
 
   return {
-    status, view, error, seat, code, closedReason, serverUrl: SERVER_URL,
+    status, view, error, seat, code, closedReason,
+    serverUrl, setServerUrl, resetServerUrl, defaultServerUrl: defaultServerUrl(),
     connect, disconnect, createRoom, joinRoom, startGame, play, newHand, sendChat, devWin,
     clearError: () => setError(null),
   };
