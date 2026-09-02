@@ -26,11 +26,17 @@ const SOUND_FILES = {
 // "available" and then silently fail to play as audio. The content-type
 // check is what actually tells a real audio file apart from that fallback.
 const fileAvailable = {};
+/* Kept as promises, not just the resolved booleans, because callers need to be
+   able to *wait* for the answer. Reading the boolean synchronously means losing
+   a race on first paint: the probe hasn't returned yet, the key is undefined,
+   and the caller wrongly concludes there's no file. Locally that never happens
+   — the HEAD is instant — but over a tunnel or a real host it reliably does. */
+const fileProbe = {};
 for (const key of Object.keys(SOUND_FILES)) {
-  fetch(SOUND_FILES[key], { method: "HEAD" })
+  fileProbe[key] = fetch(SOUND_FILES[key], { method: "HEAD" })
     .then((res) => {
       const type = res.headers.get("content-type") || "";
-      fileAvailable[key] = res.ok && type.startsWith("audio/");
+      return (fileAvailable[key] = res.ok && type.startsWith("audio/"));
     })
     .catch(() => (fileAvailable[key] = false));
 }
@@ -221,19 +227,68 @@ function stopSynthLoop() {
   }
 }
 
+/* Bumped on every start/stop so a probe that resolves late can tell it's been
+   superseded. Without it, leaving a screen mid-probe starts that screen's music
+   on top of the next one's. */
+let musicGeneration = 0;
+
+/* Browsers refuse to start audio until the user has interacted with the page,
+   so the very first screen can't simply play — the attempt is rejected and,
+   without this, stays silent until something happens to try again. That's why
+   music appeared only after changing screens: navigating meant clicking, and
+   the click was what actually unlocked audio.
+
+   So a refusal arms a one-shot retry on the next click or keypress. Listening
+   on the window in the capture phase means the game's own buttons don't have
+   to know anything about it. */
+let pendingGestureStart = null;
+function retryOnFirstGesture(start) {
+  pendingGestureStart = start;
+  const fire = () => {
+    window.removeEventListener("pointerdown", fire, true);
+    window.removeEventListener("keydown", fire, true);
+    window.removeEventListener("touchstart", fire, true);
+    const run = pendingGestureStart;
+    pendingGestureStart = null;
+    if (run) run();
+  };
+  window.addEventListener("pointerdown", fire, true);
+  window.addEventListener("keydown", fire, true);
+  window.addEventListener("touchstart", fire, true);
+}
+
 function startMusic(fileKey, chords, stepSeconds, peakGain, fileVolume) {
-  safely(() => {
-    if (fileAvailable[fileKey]) {
-      if (!musicAudioEl || musicAudioEl.src !== new URL(SOUND_FILES[fileKey], window.location.href).href) {
-        musicAudioEl = new Audio(SOUND_FILES[fileKey]);
-        musicAudioEl.loop = true;
+  const generation = ++musicGeneration;
+
+  const begin = (available) => {
+    if (generation !== musicGeneration) return; // moved on while we were asking
+    safely(() => {
+      if (available) {
+        if (!musicAudioEl || musicAudioEl.src !== new URL(SOUND_FILES[fileKey], window.location.href).href) {
+          musicAudioEl = new Audio(SOUND_FILES[fileKey]);
+          musicAudioEl.loop = true;
+        }
+        musicAudioEl.volume = fileVolume;
+        musicAudioEl.play().catch(() => {
+          // refused for want of a gesture — wait for one and start then
+          retryOnFirstGesture(() => begin(available));
+        });
+      } else {
+        startSynthLoop(chords, stepSeconds, peakGain);
+        // an AudioContext created before a gesture starts suspended; if it
+        // didn't resume, the loop is running silently and needs the same retry
+        if (ctx && ctx.state === "suspended") retryOnFirstGesture(() => begin(available));
       }
-      musicAudioEl.volume = fileVolume;
-      musicAudioEl.play().catch(() => {});
-    } else {
-      startSynthLoop(chords, stepSeconds, peakGain);
-    }
-  });
+    });
+  };
+
+  // Already know the answer: start now, with no gap.
+  if (fileAvailable[fileKey] !== undefined) return begin(fileAvailable[fileKey]);
+
+  /* Still probing. Waiting costs a moment of silence; guessing costs playing
+     the wrong music and then switching, which is what a listener actually
+     notices. The probe is a HEAD request, so this is latency, not a download. */
+  fileProbe[fileKey].then(begin);
 }
 
 export function startHomeMusic() {
@@ -249,6 +304,8 @@ export function startEndMusic() {
 }
 
 export function stopBackgroundMusic() {
+  musicGeneration++; // cancel any probe still waiting to start something
+  pendingGestureStart = null; // and any music queued behind the first click
   safely(() => {
     if (musicAudioEl) musicAudioEl.pause();
     stopSynthLoop();
