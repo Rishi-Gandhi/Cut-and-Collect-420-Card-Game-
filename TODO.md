@@ -3,8 +3,17 @@
 Captured for later — nothing here is being worked on yet.
 
 ## Gameplay
-- Timed game mode — a time limit to pick and play a card each turn ("speed chess" style)
-- Adjustable bot difficulty (easy/hard), by tuning how often the AI plays optimally
+- ~~Timed game mode — a time limit to pick and play a card each turn ("speed chess"~~
+  ~~style)~~ — done. A TURN TIMER picker on the home screen (Off/15s/8s) starts a
+  countdown once it's the human's turn; hitting 0 auto-plays a passive card for them
+  (lowest legal, but it'll still grab a 10 that's on the table) so a stalled human
+  doesn't hold up the bots.
+- ~~Adjustable bot difficulty (easy/hard), by tuning how often the AI plays~~
+  ~~optimally~~ — done, as three levels (Easy/Normal/Hard) rather than two, with Normal
+  matching the original always-on behavior so existing games aren't affected by default.
+  Tunes the two `Math.random()` thresholds in `botChoosePlay` that decide whether a bot
+  fights for a trick (beats the led suit, or cuts in) versus dumping a low card — a 10
+  already on the table still always forces the fight, regardless of difficulty.
 - ~~Support for 8 players instead of a fixed 6~~ — done, and widened further to include 4.
   A PLAYERS picker on the home screen (4/6/8) drives deck composition per RULES.md's
   Setup table (4p: 52 cards/13 each, 6p & 8p: drop the 2's for 48 cards/8 or 6 each) plus

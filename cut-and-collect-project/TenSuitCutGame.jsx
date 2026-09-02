@@ -18,6 +18,12 @@ import {
 const SUITS = ["♠", "♥", "♦", "♣"];
 const RED_SUITS = ["♥", "♦"];
 const PLAYER_COUNTS = [4, 6, 8];
+/* turn timer options for timed mode — null means untimed */
+const TIME_LIMIT_OPTIONS = [
+  { label: "OFF", value: null },
+  { label: "15s", value: 15 },
+  { label: "8s", value: 8 },
+];
 /* card ranks in play, low to high, per player count — the lowest ranks are
    dropped so the deck always divides evenly across seats:
    4p: full 52-card deck, 13 each. 6p/8p: drop the 2's, 48 cards, 8 or 6 each. */
@@ -126,9 +132,39 @@ function lowestOf(cards, rankValue) {
 function highestOf(cards, rankValue) {
   return [...cards].sort((a, b) => rankValue[b.rank] - rankValue[a.rank])[0];
 }
+function randomOf(cards) {
+  return cards[Math.floor(Math.random() * cards.length)];
+}
+/* picks any legal card at random — used when the turn timer expires. Follows
+   the same legality rules as a human's manual play: must follow the led suit
+   if holding one, otherwise any card is fair game (and its suit decides
+   whether it's a cut, sets the cut suit, or is trash). */
+function randomLegalPlay(hand, trick, cutSuit) {
+  if (trick.length === 0) {
+    return { card: randomOf(hand), role: "lead" };
+  }
+  const ledSuit = trick[0].card.suit;
+  const hasLed = hand.filter((c) => c.suit === ledSuit);
+  if (hasLed.length > 0) {
+    return { card: randomOf(hasLed), role: "follow" };
+  }
+  const card = randomOf(hand);
+  if (cutSuit === null) return { card, role: "cut" };
+  return { card, role: card.suit === cutSuit ? "cut" : "trash" };
+}
 
 /* ---------- bot AI ---------- */
-function botChoosePlay(seat, hand, trick, cutSuit, rankValue) {
+/* difficulty tunes how often a bot fights for a trick it isn't already
+   winning (beating the led suit, or cutting in) versus just dumping a low
+   card — a 10 already on the table always overrides this and forces the
+   bot to try, regardless of difficulty. */
+const BOT_DIFFICULTIES = ["easy", "normal", "hard"];
+const BOT_DIFFICULTY_SETTINGS = {
+  easy: { followBeatProb: 0.15, cutProb: 0.12 },
+  normal: { followBeatProb: 0.35, cutProb: 0.3 },
+  hard: { followBeatProb: 0.9, cutProb: 0.85 },
+};
+function botChoosePlay(seat, hand, trick, cutSuit, rankValue, botSettings) {
   const teamMine = TEAM_OF(seat);
   if (trick.length === 0) {
     // lead: play lowest card, keep long suits for later
@@ -144,7 +180,7 @@ function botChoosePlay(seat, hand, trick, cutSuit, rankValue) {
     if (amWinning) return { card: lowestOf(hasLed, rankValue), role: "follow" };
     const bestVal = currentBest.role === "follow" || currentBest.role === "lead" ? rankValue[currentBest.card.rank] : -1;
     const canBeat = currentBest.role === "cut" ? [] : hasLed.filter((c) => rankValue[c.rank] > bestVal);
-    if (canBeat.length && (trickHasTen || Math.random() < 0.35)) {
+    if (canBeat.length && (trickHasTen || Math.random() < botSettings.followBeatProb)) {
       return { card: lowestOf(canBeat, rankValue), role: "follow" };
     }
     return { card: lowestOf(hasLed, rankValue), role: "follow" };
@@ -165,7 +201,7 @@ function botChoosePlay(seat, hand, trick, cutSuit, rankValue) {
   } else {
     const cutCards = hand.filter((c) => c.suit === cutSuit);
     const nonCut = hand.filter((c) => c.suit !== cutSuit);
-    if (!amWinning && cutCards.length && (trickHasTen || Math.random() < 0.3)) {
+    if (!amWinning && cutCards.length && (trickHasTen || Math.random() < botSettings.cutProb)) {
       const bestCutVal = currentBest.role === "cut" ? rankValue[currentBest.card.rank] : -1;
       const winners = cutCards.filter((c) => rankValue[c.rank] > bestCutVal);
       const card = winners.length ? lowestOf(winners, rankValue) : lowestOf(cutCards, rankValue);
@@ -245,6 +281,8 @@ export default function TenSuitCutGame() {
   const [screen, setScreen] = useState("home"); // home | game | end
   const [playerName, setPlayerName] = useState("");
   const [playerCount, setPlayerCount] = useState(6);
+  const [botDifficulty, setBotDifficulty] = useState("normal");
+  const [turnTimeLimit, setTurnTimeLimit] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [winResult, setWinResult] = useState(null);
 
@@ -274,6 +312,10 @@ export default function TenSuitCutGame() {
         setPlayerName={setPlayerName}
         playerCount={playerCount}
         setPlayerCount={setPlayerCount}
+        botDifficulty={botDifficulty}
+        setBotDifficulty={setBotDifficulty}
+        turnTimeLimit={turnTimeLimit}
+        setTurnTimeLimit={setTurnTimeLimit}
         onStart={() => setScreen("game")}
         leaderboard={leaderboard}
       />
@@ -301,6 +343,8 @@ export default function TenSuitCutGame() {
     <GameScreen
       playerName={playerName}
       playerCount={playerCount}
+      botDifficulty={botDifficulty}
+      turnTimeLimit={turnTimeLimit}
       onUserWin={handleUserWin}
       onQuit={() => setScreen("home")}
     />
@@ -308,7 +352,11 @@ export default function TenSuitCutGame() {
 }
 
 /* ---------- home screen ---------- */
-function HomeScreen({ playerName, setPlayerName, playerCount, setPlayerCount, onStart, leaderboard }) {
+function HomeScreen({
+  playerName, setPlayerName, playerCount, setPlayerCount,
+  botDifficulty, setBotDifficulty, turnTimeLimit, setTurnTimeLimit,
+  onStart, leaderboard,
+}) {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const canStart = playerName.trim().length > 0;
 
@@ -350,6 +398,32 @@ function HomeScreen({ playerName, setPlayerName, playerCount, setPlayerCount, on
                 onClick={() => setPlayerCount(n)}
               >
                 {n}
+              </button>
+            ))}
+          </div>
+          <label style={styles.homeLabel}>BOT DIFFICULTY</label>
+          <div style={styles.playerCountRow}>
+            {BOT_DIFFICULTIES.map((d) => (
+              <button
+                key={d}
+                type="button"
+                style={{ ...styles.playerCountBtn, ...(botDifficulty === d ? styles.playerCountBtnActive : {}) }}
+                onClick={() => setBotDifficulty(d)}
+              >
+                {d.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <label style={styles.homeLabel}>TURN TIMER</label>
+          <div style={styles.playerCountRow}>
+            {TIME_LIMIT_OPTIONS.map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                style={{ ...styles.playerCountBtn, ...(turnTimeLimit === opt.value ? styles.playerCountBtnActive : {}) }}
+                onClick={() => setTurnTimeLimit(opt.value)}
+              >
+                {opt.label}
               </button>
             ))}
           </div>
@@ -442,10 +516,11 @@ function Leaderboard({ entries }) {
 }
 
 /* ---------- gameplay screen ---------- */
-function GameScreen({ playerName, playerCount, onUserWin, onQuit }) {
+function GameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, onUserWin, onQuit }) {
   const seatCount = playerCount;
   const ranks = RANKS_BY_PLAYER_COUNT[seatCount];
   const rankValue = buildRankValue(ranks);
+  const botSettings = BOT_DIFFICULTY_SETTINGS[botDifficulty];
   const seatNames = getSeatNames(playerName, seatCount);
   const seatPositions = getSeatPositions(seatCount);
   const trickPositions = getTrickPositions(seatCount);
@@ -595,11 +670,32 @@ function GameScreen({ playerName, playerCount, onUserWin, onQuit }) {
     if (game.phase !== "playing") return;
     if (game.turn === 0) return; // human
     const t = setTimeout(() => {
-      const { card, role } = botChoosePlay(game.turn, game.hands[game.turn], game.trick, game.cutSuit, rankValue);
+      const { card, role } = botChoosePlay(game.turn, game.hands[game.turn], game.trick, game.cutSuit, rankValue, botSettings);
       commitPlay(game.turn, card, role);
     }, 1800);
     return () => clearTimeout(t);
-  }, [game.phase, game.turn, game.hands, game.trick, game.cutSuit, commitPlay, rankValue]);
+  }, [game.phase, game.turn, game.hands, game.trick, game.cutSuit, commitPlay, rankValue, botSettings]);
+
+  /* turn timer (timed mode only) — counts down while it's the human's turn;
+     hitting 0 plays a random legal card for them (still must follow the led
+     suit if they hold one) so a stalled human doesn't stall the bots. */
+  const [timeLeft, setTimeLeft] = useState(turnTimeLimit);
+  const isHumanTurn = game.phase === "playing" && game.turn === 0;
+  useEffect(() => {
+    if (!turnTimeLimit || !isHumanTurn) {
+      setTimeLeft(turnTimeLimit);
+      return;
+    }
+    setTimeLeft(turnTimeLimit);
+    const interval = setInterval(() => setTimeLeft((t) => t - 1), 1000);
+    return () => clearInterval(interval);
+  }, [turnTimeLimit, isHumanTurn]);
+
+  useEffect(() => {
+    if (!turnTimeLimit || !isHumanTurn || timeLeft === null || timeLeft > 0) return;
+    const { card, role } = randomLegalPlay(game.hands[0], game.trick, game.cutSuit);
+    commitPlay(0, card, role);
+  }, [timeLeft, turnTimeLimit, isHumanTurn, game.hands, game.trick, game.cutSuit, commitPlay]);
 
   /* human plays a card */
   function tryPlay(card) {
@@ -785,6 +881,11 @@ function GameScreen({ playerName, playerCount, onUserWin, onQuit }) {
         <div style={styles.handPanel}>
           <div style={styles.handHeader}>
             YOUR HAND {yourTurn && <span style={styles.turnPing}>● your turn</span>}
+            {yourTurn && turnTimeLimit != null && (
+              <span style={{ ...styles.turnTimer, ...(timeLeft <= 3 ? styles.turnTimerLow : {}) }}>
+                ⏱ {Math.max(timeLeft, 0)}s
+              </span>
+            )}
           </div>
           <div style={styles.handRow}>
             {hand.map((card, i) => {
@@ -927,6 +1028,10 @@ const GLOBAL_STYLE = `
 @keyframes cardDealIn {
   from { opacity: 0; transform: translateY(18px) scale(0.9); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes timerPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
 }
 `;
 
@@ -1073,6 +1178,11 @@ const styles = {
     marginBottom: 6, display: "flex", gap: 10, alignItems: "center",
   },
   turnPing: { color: "#E7C878", fontWeight: 700 },
+  turnTimer: {
+    color: "#E7C878", fontWeight: 700, fontSize: 20, letterSpacing: 1,
+    display: "inline-block", transformOrigin: "center",
+  },
+  turnTimerLow: { color: "#E86A6A", animation: "timerPulse 0.6s ease-in-out infinite" },
   handRow: { display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" },
   handCardBtn: { background: "none", border: "none", padding: 0, transition: "transform 0.15s" },
 
