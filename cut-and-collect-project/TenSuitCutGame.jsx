@@ -530,6 +530,12 @@ function GameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, onU
     outcomes: { win: 0, loss: 0, tie: 0 },
   }));
   const logEndRef = useRef(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  function sendChat(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setChatMessages((m) => [...m, { name: seatNames[0], team: TEAM_OF(0), text: trimmed }]);
+  }
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -760,7 +766,7 @@ function GameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, onU
   const currentWinner = game.trick.length > 0 ? evaluateWinner(game.trick, rankValue) : null;
 
   return (
-    <div style={styles.wrap}>
+    <div style={{ ...styles.wrap, ...styles.gameWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={{ ...styles.header, paddingTop: 66 }}>
         <div style={styles.topLeftControls}>
@@ -781,7 +787,8 @@ function GameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, onU
         <div style={styles.subtitle}>a ten-hunting trick game · {seatCount} at the table</div>
       </div>
 
-      <div style={styles.body}>
+      <div style={styles.gameLayout}>
+      <div style={{ ...styles.body, flex: 1, minWidth: 0 }}>
         {/* scoreboard */}
         <div style={styles.scorePanel}>
           <TeamScore team="A" tensWon={game.tensWon.A} score={game.scores.A} />
@@ -919,6 +926,58 @@ function GameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, onU
             })}
           </div>
         </div>
+      </div>
+      <ChatPanel messages={chatMessages} onSend={sendChat} />
+      </div>
+    </div>
+  );
+}
+
+/* ---------- chat sidebar — local-only for now (bots don't chat); ready to
+   wire into real multiplayer once other seats are actual players ---------- */
+function ChatPanel({ messages, onSend }) {
+  const [draft, setDraft] = useState("");
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  function handleSend() {
+    if (!draft.trim()) return;
+    onSend(draft);
+    setDraft("");
+  }
+
+  return (
+    <div style={styles.chatPanel}>
+      <div style={styles.chatHeader}>CHAT</div>
+      <div style={styles.chatMessages}>
+        {messages.length === 0 ? (
+          <div style={styles.chatEmpty}>No messages yet — say hello!</div>
+        ) : (
+          messages.map((m, i) => (
+            <div key={i} style={styles.chatLine}>
+              <span style={styles.chatName}>{m.name}</span>
+              <span style={styles.chatTeam}> ({TEAM_SHORT[m.team]})</span>
+              <span style={styles.chatText}>: {m.text}</span>
+            </div>
+          ))
+        )}
+        <div ref={endRef} />
+      </div>
+      <div style={styles.chatInputRow}>
+        <input
+          style={styles.chatInput}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSend();
+          }}
+          placeholder="Type a message..."
+          maxLength={200}
+        />
+        <button style={styles.chatSendBtn} onClick={handleSend}>Send</button>
       </div>
     </div>
   );
@@ -1064,11 +1123,11 @@ const styles = {
   topRightControls: { position: "absolute", top: 6, right: 16, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 },
   gameCounter: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, letterSpacing: 1.5,
-    color: "#A9C2AE", background: "rgba(0,0,0,0.28)", borderRadius: 6, padding: "5px 12px",
+    color: "#A9C2AE", background: "rgba(0,0,0,0.28)", borderRadius: 6, padding: "6px 12px",
   },
   outcomesCounter: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 1,
-    color: "#A9C2AE", background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 12px",
+    color: "#A9C2AE", background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "6px 12px",
   },
   outcomeWin: { color: "#8FD19E", fontWeight: 700 },
   outcomeLoss: { color: "#D68F8F", fontWeight: 700 },
@@ -1076,12 +1135,12 @@ const styles = {
   quitBtn: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, letterSpacing: 1.5,
     color: "#cfd9c9", background: "rgba(0,0,0,0.28)", border: "1px solid #6b6250", borderRadius: 6,
-    padding: "5px 12px", cursor: "pointer",
+    padding: "6px 12px", cursor: "pointer",
   },
   autoWinBtn: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: 1,
     color: "#8fa595", background: "transparent", border: "1px dashed #6b6250", borderRadius: 6,
-    padding: "3px 8px", cursor: "pointer",
+    padding: "4px 8px", cursor: "pointer",
   },
   title: {
     fontFamily: "'Bebas Neue', sans-serif",
@@ -1255,4 +1314,35 @@ const styles = {
     border: "1px solid #E7C87866", marginBottom: 16,
   },
   endSub: { fontSize: 15, color: "#cfd9c9", marginBottom: 16 },
+
+  gameWrap: { maxWidth: 1380 },
+  gameLayout: { display: "flex", gap: 14, alignItems: "stretch" },
+  chatPanel: {
+    width: 220, flexShrink: 0, background: "rgba(0,0,0,0.22)", borderRadius: 10,
+    display: "flex", flexDirection: "column", boxSizing: "border-box",
+  },
+  chatHeader: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 2, color: "#A9C2AE",
+    padding: "10px 14px 8px", borderBottom: "1px solid rgba(255,255,255,0.08)",
+  },
+  chatMessages: {
+    flex: 1, overflowY: "auto", padding: "8px 14px", display: "flex", flexDirection: "column", gap: 6,
+  },
+  chatEmpty: { fontSize: 13, color: "#8fa595", fontStyle: "italic" },
+  chatLine: { fontSize: 13, lineHeight: 1.4, color: "#EDE6D3", wordBreak: "break-word" },
+  chatName: { fontWeight: 700, color: "#E7C878" },
+  chatTeam: { fontSize: 11, color: "#8fa595" },
+  chatText: { color: "#cfd9c9" },
+  chatInputRow: {
+    display: "flex", gap: 6, padding: "8px 12px", borderTop: "1px solid rgba(255,255,255,0.08)",
+  },
+  chatInput: {
+    flex: 1, boxSizing: "border-box", fontFamily: "'Inter', sans-serif", fontSize: 13,
+    background: "#0d2e21", color: "#EDE6D3", border: "1px solid #6b6250", borderRadius: 6,
+    padding: "7px 10px", outline: "none", minWidth: 0,
+  },
+  chatSendBtn: {
+    fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 12,
+    background: "#E7C878", color: "#1c2118", border: "none", borderRadius: 6, padding: "7px 12px", cursor: "pointer",
+  },
 };

@@ -42,7 +42,10 @@ Captured for later — nothing here is being worked on yet.
   one was pulled back out.
 
 ## Multiplayer / social
-- Chat room for players to message each other during a game, just for fun
+- ~~Chat room for players to message each other during a game, just for fun~~ — done,
+  a side-column chat panel on the Game screen (name + team + message). Local-only for
+  now since only the human seat is a real player — bots don't chat — but it's wired up
+  and ready for when real players fill the other seats.
 - Real multiplayer — other humans instead of bots for Players 2–6
 - Semi-multiplayer — a mix of some human players and some bots
 
