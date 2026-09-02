@@ -1,19 +1,19 @@
 # Cut & Collect — Game Rules
 
-A 6+ player (even number only) trick-taking card game played in 2 teams. Teammates sit
+A 4+ player (even number only) trick-taking card game played in 2 teams. Teammates sit
 in alternating seats around the circle (every other seat is your team). The objective is
 to collect 10's — first side to 4 wins outright ("420" / mercy finish), otherwise once all
 four 10's have been captured (whether or not cards are still left to play) it's an early
 finish and whichever team holds more of them wins; an even split is a tie.
 
 ## Setup
-- Players: even number, 6 or more.
+- Players: 4, 6, or 8 (picked on the home screen).
 - Teams: exactly 2, always. Seats alternate — odd seats one team, even seats the other.
 - Deck: standard 52 cards, with the lowest-ranked cards removed evenly so everyone gets
-  the same hand size. With 2's as the lowest rank (Aces are high), all four 2's are
-  removed for 6 players (48 cards, 8 each) or 8 players (48 cards... adjust as needed —
-  the general rule is: remove the lowest cards until the remaining deck divides evenly
-  by the player count).
+  the same hand size (Aces are high):
+  - **4 players**: full 52-card deck, 13 cards each.
+  - **6 players**: 2's removed, 48 cards, 8 each.
+  - **8 players**: 2's removed, 48 cards, 6 each.
 - Deal: one player shuffles and deals all cards out evenly. The player to the dealer's
   left leads the first trick.
 

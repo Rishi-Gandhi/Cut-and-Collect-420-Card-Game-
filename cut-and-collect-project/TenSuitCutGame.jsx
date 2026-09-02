@@ -17,21 +17,35 @@ import {
 /* ---------- constants ---------- */
 const SUITS = ["♠", "♥", "♦", "♣"];
 const RED_SUITS = ["♥", "♦"];
-const RANKS = ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
-const RANK_VALUE = Object.fromEntries(RANKS.map((r, i) => [r, i + 3]));
-const SEAT_COUNT = 6;
+const PLAYER_COUNTS = [4, 6, 8];
+/* card ranks in play, low to high, per player count — the lowest ranks are
+   dropped so the deck always divides evenly across seats:
+   4p: full 52-card deck, 13 each. 6p/8p: drop the 2's, 48 cards, 8 or 6 each. */
+const RANKS_DROP_2S = ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
+const RANKS_BY_PLAYER_COUNT = {
+  4: ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"],
+  6: RANKS_DROP_2S,
+  8: RANKS_DROP_2S,
+};
+function buildRankValue(ranks) {
+  return Object.fromEntries(ranks.map((r, i) => [r, i + 1]));
+}
 const TEAM_OF = (seat) => (seat % 2 === 0 ? "A" : "B");
 const TEAM_SHORT = { A: "Team A", B: "Team B" };
 
-function getSeatNames(playerName) {
+function getSeatNames(playerName, seatCount) {
   const name = (playerName || "").trim() || "You";
-  return [name, "Player 2", "Player 3", "Player 4", "Player 5", "Player 6"];
+  const names = [name];
+  for (let i = 2; i <= seatCount; i++) names.push(`Player ${i}`);
+  return names;
 }
 
 /* seat layout around the oval table (percent positions) — index order
-   matches turn order (0→1→2→3→4→5→0), laid out clockwise starting at
-   the bottom so play visibly proceeds Player 1 → ... → Player 6. */
-const SEAT_POS = [
+   matches turn order (0→1→...→0), laid out clockwise starting at the
+   bottom so play visibly proceeds Player 1 → ... → Player N. The 6-seat
+   case keeps its original hand-tuned positions; other seat counts fall
+   back to an evenly-spaced ellipse. */
+const SEAT_POS_6 = [
   { left: "50%", top: "93%" }, // 0 you - bottom
   { left: "13%", top: "76%" }, // 1 - bottom left
   { left: "13%", top: "22%" }, // 2 - top left
@@ -39,7 +53,7 @@ const SEAT_POS = [
   { left: "87%", top: "22%" }, // 4 - top right
   { left: "87%", top: "76%" }, // 5 - bottom right
 ];
-const TRICK_POS = [
+const TRICK_POS_6 = [
   { left: "50%", top: "76%" },
   { left: "28%", top: "64%" },
   { left: "28%", top: "36%" },
@@ -47,11 +61,33 @@ const TRICK_POS = [
   { left: "72%", top: "36%" },
   { left: "72%", top: "64%" },
 ];
+const TABLE_CENTER = { x: 50, y: 49 };
+function getSeatPositions(seatCount) {
+  if (seatCount === 6) return SEAT_POS_6;
+  const rx = 40, ry = 44;
+  const positions = [];
+  for (let i = 0; i < seatCount; i++) {
+    const theta = ((90 + (360 / seatCount) * i) * Math.PI) / 180;
+    positions.push({
+      left: `${TABLE_CENTER.x + rx * Math.cos(theta)}%`,
+      top: `${TABLE_CENTER.y + ry * Math.sin(theta)}%`,
+    });
+  }
+  return positions;
+}
+function getTrickPositions(seatCount) {
+  if (seatCount === 6) return TRICK_POS_6;
+  const scale = 0.62;
+  return getSeatPositions(seatCount).map((p) => ({
+    left: `${TABLE_CENTER.x + (parseFloat(p.left) - TABLE_CENTER.x) * scale}%`,
+    top: `${TABLE_CENTER.y + (parseFloat(p.top) - TABLE_CENTER.y) * scale}%`,
+  }));
+}
 
 /* ---------- deck helpers ---------- */
-function buildDeck() {
+function buildDeck(ranks) {
   const deck = [];
-  for (const s of SUITS) for (const r of RANKS) deck.push({ suit: s, rank: r, id: `${r}${s}` });
+  for (const s of SUITS) for (const r of ranks) deck.push({ suit: s, rank: r, id: `${r}${s}` });
   return deck;
 }
 function shuffle(arr) {
@@ -62,56 +98,56 @@ function shuffle(arr) {
   }
   return a;
 }
-function sortHand(cards) {
+function sortHand(cards, rankValue) {
   return [...cards].sort((a, b) => {
     if (a.suit !== b.suit) return SUITS.indexOf(a.suit) - SUITS.indexOf(b.suit);
-    return RANK_VALUE[a.rank] - RANK_VALUE[b.rank];
+    return rankValue[a.rank] - rankValue[b.rank];
   });
 }
-function dealHands() {
-  const deck = shuffle(buildDeck());
-  const hands = Array.from({ length: SEAT_COUNT }, () => []);
-  for (let i = 0; i < deck.length; i++) hands[i % SEAT_COUNT].push(deck[i]);
-  return hands.map(sortHand);
+function dealHands(seatCount, ranks, rankValue) {
+  const deck = shuffle(buildDeck(ranks));
+  const hands = Array.from({ length: seatCount }, () => []);
+  for (let i = 0; i < deck.length; i++) hands[i % seatCount].push(deck[i]);
+  return hands.map((h) => sortHand(h, rankValue));
 }
 
 /* ---------- trick evaluation ---------- */
-function evaluateWinner(trick) {
+function evaluateWinner(trick, rankValue) {
   const cuts = trick.filter((p) => p.role === "cut");
   const pool = cuts.length ? cuts : trick.filter((p) => p.role === "lead" || p.role === "follow");
-  return pool.reduce((best, p) => (RANK_VALUE[p.card.rank] > RANK_VALUE[best.card.rank] ? p : best), pool[0]);
+  return pool.reduce((best, p) => (rankValue[p.card.rank] > rankValue[best.card.rank] ? p : best), pool[0]);
 }
 function tensIn(trick) {
   return trick.filter((p) => p.card.rank === "10").length;
 }
-function lowestOf(cards) {
-  return [...cards].sort((a, b) => RANK_VALUE[a.rank] - RANK_VALUE[b.rank])[0];
+function lowestOf(cards, rankValue) {
+  return [...cards].sort((a, b) => rankValue[a.rank] - rankValue[b.rank])[0];
 }
-function highestOf(cards) {
-  return [...cards].sort((a, b) => RANK_VALUE[b.rank] - RANK_VALUE[a.rank])[0];
+function highestOf(cards, rankValue) {
+  return [...cards].sort((a, b) => rankValue[b.rank] - rankValue[a.rank])[0];
 }
 
 /* ---------- bot AI ---------- */
-function botChoosePlay(seat, hand, trick, cutSuit) {
+function botChoosePlay(seat, hand, trick, cutSuit, rankValue) {
   const teamMine = TEAM_OF(seat);
   if (trick.length === 0) {
     // lead: play lowest card, keep long suits for later
-    return { card: lowestOf(hand), role: "lead" };
+    return { card: lowestOf(hand, rankValue), role: "lead" };
   }
   const ledSuit = trick[0].card.suit;
   const hasLed = hand.filter((c) => c.suit === ledSuit);
-  const currentBest = evaluateWinner(trick);
+  const currentBest = evaluateWinner(trick, rankValue);
   const amWinning = TEAM_OF(currentBest.seat) === teamMine;
   const trickHasTen = tensIn(trick) > 0;
 
   if (hasLed.length > 0) {
-    if (amWinning) return { card: lowestOf(hasLed), role: "follow" };
-    const bestVal = currentBest.role === "follow" || currentBest.role === "lead" ? RANK_VALUE[currentBest.card.rank] : -1;
-    const canBeat = currentBest.role === "cut" ? [] : hasLed.filter((c) => RANK_VALUE[c.rank] > bestVal);
+    if (amWinning) return { card: lowestOf(hasLed, rankValue), role: "follow" };
+    const bestVal = currentBest.role === "follow" || currentBest.role === "lead" ? rankValue[currentBest.card.rank] : -1;
+    const canBeat = currentBest.role === "cut" ? [] : hasLed.filter((c) => rankValue[c.rank] > bestVal);
     if (canBeat.length && (trickHasTen || Math.random() < 0.35)) {
-      return { card: lowestOf(canBeat), role: "follow" };
+      return { card: lowestOf(canBeat, rankValue), role: "follow" };
     }
-    return { card: lowestOf(hasLed), role: "follow" };
+    return { card: lowestOf(hasLed, rankValue), role: "follow" };
   }
 
   // cannot follow suit
@@ -124,25 +160,25 @@ function botChoosePlay(seat, hand, trick, cutSuit) {
     });
     const bestSuit = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
     const candidates = hand.filter((c) => c.suit === bestSuit);
-    const card = trickHasTen ? highestOf(candidates) : lowestOf(candidates);
+    const card = trickHasTen ? highestOf(candidates, rankValue) : lowestOf(candidates, rankValue);
     return { card, role: "cut" };
   } else {
     const cutCards = hand.filter((c) => c.suit === cutSuit);
     const nonCut = hand.filter((c) => c.suit !== cutSuit);
     if (!amWinning && cutCards.length && (trickHasTen || Math.random() < 0.3)) {
-      const bestCutVal = currentBest.role === "cut" ? RANK_VALUE[currentBest.card.rank] : -1;
-      const winners = cutCards.filter((c) => RANK_VALUE[c.rank] > bestCutVal);
-      const card = winners.length ? lowestOf(winners) : lowestOf(cutCards);
+      const bestCutVal = currentBest.role === "cut" ? rankValue[currentBest.card.rank] : -1;
+      const winners = cutCards.filter((c) => rankValue[c.rank] > bestCutVal);
+      const card = winners.length ? lowestOf(winners, rankValue) : lowestOf(cutCards, rankValue);
       return { card, role: "cut" };
     }
-    if (nonCut.length) return { card: lowestOf(nonCut), role: "trash" };
-    return { card: lowestOf(cutCards), role: "cut" };
+    if (nonCut.length) return { card: lowestOf(nonCut, rankValue), role: "trash" };
+    return { card: lowestOf(cutCards, rankValue), role: "cut" };
   }
 }
 
 /* ---------- initial state factory ---------- */
-function freshGame(seatNames, leader = 0) {
-  const hands = dealHands();
+function freshGame(seatNames, seatCount, ranks, rankValue, leader = 0) {
+  const hands = dealHands(seatCount, ranks, rankValue);
   return {
     hands,
     leader,
@@ -208,6 +244,7 @@ async function recordHandResult(name, result, personalBestCandidate = null) {
 export default function TenSuitCutGame() {
   const [screen, setScreen] = useState("home"); // home | game | end
   const [playerName, setPlayerName] = useState("");
+  const [playerCount, setPlayerCount] = useState(6);
   const [leaderboard, setLeaderboard] = useState([]);
   const [winResult, setWinResult] = useState(null);
 
@@ -235,6 +272,8 @@ export default function TenSuitCutGame() {
       <HomeScreen
         playerName={playerName}
         setPlayerName={setPlayerName}
+        playerCount={playerCount}
+        setPlayerCount={setPlayerCount}
         onStart={() => setScreen("game")}
         leaderboard={leaderboard}
       />
@@ -261,6 +300,7 @@ export default function TenSuitCutGame() {
   return (
     <GameScreen
       playerName={playerName}
+      playerCount={playerCount}
       onUserWin={handleUserWin}
       onQuit={() => setScreen("home")}
     />
@@ -268,7 +308,7 @@ export default function TenSuitCutGame() {
 }
 
 /* ---------- home screen ---------- */
-function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
+function HomeScreen({ playerName, setPlayerName, playerCount, setPlayerCount, onStart, leaderboard }) {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const canStart = playerName.trim().length > 0;
 
@@ -282,7 +322,7 @@ function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
-        <div style={styles.subtitle}>a ten-hunting trick game · six at the table</div>
+        <div style={styles.subtitle}>a ten-hunting trick game · {playerCount} at the table</div>
       </div>
 
       <div style={styles.homeBody}>
@@ -300,6 +340,19 @@ function HomeScreen({ playerName, setPlayerName, onStart, leaderboard }) {
             maxLength={24}
             autoFocus
           />
+          <label style={styles.homeLabel}>PLAYERS</label>
+          <div style={styles.playerCountRow}>
+            {PLAYER_COUNTS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                style={{ ...styles.playerCountBtn, ...(playerCount === n ? styles.playerCountBtnActive : {}) }}
+                onClick={() => setPlayerCount(n)}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
           <button
             style={{ ...styles.dealBtn, ...(canStart ? {} : styles.dealBtnDisabled) }}
             disabled={!canStart}
@@ -389,10 +442,15 @@ function Leaderboard({ entries }) {
 }
 
 /* ---------- gameplay screen ---------- */
-function GameScreen({ playerName, onUserWin, onQuit }) {
-  const seatNames = getSeatNames(playerName);
+function GameScreen({ playerName, playerCount, onUserWin, onQuit }) {
+  const seatCount = playerCount;
+  const ranks = RANKS_BY_PLAYER_COUNT[seatCount];
+  const rankValue = buildRankValue(ranks);
+  const seatNames = getSeatNames(playerName, seatCount);
+  const seatPositions = getSeatPositions(seatCount);
+  const trickPositions = getTrickPositions(seatCount);
   const [game, setGame] = useState(() => ({
-    ...freshGame(seatNames),
+    ...freshGame(seatNames, seatCount, ranks, rankValue),
     gameNumber: 1,
     outcomes: { win: 0, loss: 0, tie: 0 },
   }));
@@ -432,20 +490,20 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
         log.push(`${name} has nothing useful and discards ${card.rank}${card.suit}.`);
       }
 
-      const nextTurn = (seat + 1) % SEAT_COUNT;
-      if (trick.length === SEAT_COUNT) {
+      const nextTurn = (seat + 1) % seatCount;
+      if (trick.length === seatCount) {
         return { ...g, hands, trick, cutSuit, log, phase: "resolving", turn: nextTurn };
       }
       return { ...g, hands, trick, cutSuit, log, turn: nextTurn };
     });
-  }, [seatNames, game.cutSuit]);
+  }, [seatNames, game.cutSuit, seatCount]);
 
   /* resolve a completed trick */
   useEffect(() => {
     if (game.phase !== "resolving") return;
     const t = setTimeout(() => {
       setGame((g) => {
-        const winner = evaluateWinner(g.trick);
+        const winner = evaluateWinner(g.trick, rankValue);
         const team = TEAM_OF(winner.seat);
         const wonSuits = g.trick.filter((p) => p.card.rank === "10").map((p) => p.card.suit);
         const pts = wonSuits.length;
@@ -494,7 +552,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
       });
     }, 1100);
     return () => clearTimeout(t);
-  }, [game.phase, seatNames]);
+  }, [game.phase, seatNames, rankValue]);
 
   /* hand-over fanfare — a separate effect (not a call inside setGame's updater)
      so React's dev-mode double-invoking of state updaters can't play it twice */
@@ -537,11 +595,11 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
     if (game.phase !== "playing") return;
     if (game.turn === 0) return; // human
     const t = setTimeout(() => {
-      const { card, role } = botChoosePlay(game.turn, game.hands[game.turn], game.trick, game.cutSuit);
+      const { card, role } = botChoosePlay(game.turn, game.hands[game.turn], game.trick, game.cutSuit, rankValue);
       commitPlay(game.turn, card, role);
     }, 1800);
     return () => clearTimeout(t);
-  }, [game.phase, game.turn, game.hands, game.trick, game.cutSuit, commitPlay]);
+  }, [game.phase, game.turn, game.hands, game.trick, game.cutSuit, commitPlay, rankValue]);
 
   /* human plays a card */
   function tryPlay(card) {
@@ -571,8 +629,8 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
   function newHand() {
     setGame((g) => {
       const gameNumber = g.gameNumber + 1;
-      const leader = (gameNumber - 1) % SEAT_COUNT; // lead rotates clockwise each hand
-      return { ...freshGame(seatNames, leader), gameNumber, outcomes: g.outcomes };
+      const leader = (gameNumber - 1) % seatCount; // lead rotates clockwise each hand
+      return { ...freshGame(seatNames, seatCount, ranks, rankValue, leader), gameNumber, outcomes: g.outcomes };
     });
   }
 
@@ -603,7 +661,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
   const hand = game.hands[0];
   const ledSuit = game.trick.length ? game.trick[0].card.suit : null;
   const hasLed = ledSuit && hand.some((c) => c.suit === ledSuit);
-  const currentWinner = game.trick.length > 0 ? evaluateWinner(game.trick) : null;
+  const currentWinner = game.trick.length > 0 ? evaluateWinner(game.trick, rankValue) : null;
 
   return (
     <div style={styles.wrap}>
@@ -624,7 +682,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
           </div>
         </div>
         <div style={styles.title}>CUT &amp; COLLECT</div>
-        <div style={styles.subtitle}>a ten-hunting trick game · six at the table</div>
+        <div style={styles.subtitle}>a ten-hunting trick game · {seatCount} at the table</div>
       </div>
 
       <div style={styles.body}>
@@ -646,8 +704,8 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
 
         {/* table */}
         <div style={styles.tableOuter}>
-          <div style={styles.tableFelt}>
-            {SEAT_POS.map((pos, seat) => (
+          <div style={{ ...styles.tableFelt, ...(seatCount > 6 ? styles.tableFeltWide : {}) }}>
+            {seatPositions.map((pos, seat) => (
               <div key={seat} style={{ ...styles.seat, left: pos.left, top: pos.top }}>
                 <div
                   style={{
@@ -666,7 +724,7 @@ function GameScreen({ playerName, onUserWin, onQuit }) {
             ))}
 
             {game.trick.map((p) => {
-              const pos = TRICK_POS[p.seat];
+              const pos = trickPositions[p.seat];
               const isWinning = currentWinner?.seat === p.seat;
               return (
                 <div
@@ -957,11 +1015,16 @@ const styles = {
 
   tableOuter: { display: "flex", justifyContent: "center" },
   tableFelt: {
-    position: "relative", width: "100%", maxWidth: 700, height: 415,
+    position: "relative", width: 700, height: 415,
     background: "radial-gradient(ellipse at center, #1b5a41 0%, #123C2E 65%, #0d2e21 100%)",
     borderRadius: "50% / 40%", border: "6px solid #3b2a17",
     boxShadow: "inset 0 0 40px rgba(0,0,0,0.5)",
   },
+  /* the extra height (not just width) gives trick cards enough room to spread
+     out from the seat-label ring without the two overlapping — a percentage
+     width here wouldn't reliably reach this size, since the table's block
+     ancestor is itself sized to fit its narrower siblings, not the table */
+  tableFeltWide: { width: 820, height: 540 },
   seat: { position: "absolute", transform: "translate(-50%,-50%)", textAlign: "center" },
   seatLabel: {
     fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600,
@@ -1039,6 +1102,13 @@ const styles = {
     background: "#0d2e21", color: "#EDE6D3", border: "1px solid #6b6250", borderRadius: 6, padding: "10px 12px",
     outline: "none",
   },
+  playerCountRow: { display: "flex", gap: 8 },
+  playerCountBtn: {
+    flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 600,
+    background: "transparent", color: "#cfd9c9", border: "1px solid #6b6250", borderRadius: 6,
+    padding: "8px 0", cursor: "pointer",
+  },
+  playerCountBtnActive: { background: "#E7C878", color: "#1c2118", border: "1px solid #E7C878", fontWeight: 700 },
 
   rulesPanel: {
     background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "16px 20px", width: "100%",

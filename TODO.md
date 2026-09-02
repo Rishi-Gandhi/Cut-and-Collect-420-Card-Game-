@@ -5,7 +5,13 @@ Captured for later — nothing here is being worked on yet.
 ## Gameplay
 - Timed game mode — a time limit to pick and play a card each turn ("speed chess" style)
 - Adjustable bot difficulty (easy/hard), by tuning how often the AI plays optimally
-- Support for 8 or 10 players instead of a fixed 6 (RULES.md already says "6 or more")
+- ~~Support for 8 players instead of a fixed 6~~ — done, and widened further to include 4.
+  A PLAYERS picker on the home screen (4/6/8) drives deck composition per RULES.md's
+  Setup table (4p: 52 cards/13 each, 6p & 8p: drop the 2's for 48 cards/8 or 6 each) plus
+  seat count, hand size, and the table's seat/trick layout. The 6-player table layout
+  keeps its original hand-tuned positions; 4/8 fall back to a generic evenly-spaced
+  ellipse. A 10-player option was tried and then dropped — even with a wider table, played
+  cards in the trick area sat too close together with 10 hands in flight.
 - A "cheating" mode — sneak messages to your teammate about your hand, but if the other
   team catches on, they get to choose what card you play next
 
