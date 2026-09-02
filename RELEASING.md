@@ -173,3 +173,23 @@ npm run electron:dev  # same, plus the desktop shell
 With no `.env`, the client connects to `ws://localhost:8787`, which is what
 `npm run server` starts. Two browser tabs at http://localhost:5173 are enough to
 test a real two-player game.
+
+### Which build command to use
+
+| Command | Output | Time | Use it for |
+|---|---|---|---|
+| `npm run package` | `release/mac-arm64/Cut & Collect.app` — your architecture only, no installers | ~4s | Day-to-day: checking a change in the real desktop shell |
+| `npm run package:dist` | dmg + zip, arm64 **and** x64 | minutes, ~660MB | Installers, without publishing them |
+| `npm run release` | Same as `package:dist`, then uploads to GitHub Releases | minutes | An actual release |
+
+`package` passes electron-builder's `--dir`, which skips installer creation and
+builds only for this machine's architecture. The other two build every target in
+the `build.mac` config — which means downloading a second Electron binary for
+x64 and writing four ~165MB artifacts, hence the minutes. Reach for them only
+when you need something shippable.
+
+**Heads up:** a packaged app has no multiplayer server unless you give it one.
+Built with no `.env`, it falls back to `ws://localhost:8787` — fine on your own
+machine with `npm run server` running, useless to anyone you send the dmg to.
+Set `VITE_MP_SERVER_URL` to a deployed server (section 1) before building
+anything you intend to share.
