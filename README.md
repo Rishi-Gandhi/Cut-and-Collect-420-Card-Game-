@@ -31,14 +31,36 @@ To host the game yourself, either open that same link, or use the desktop app wh
 `play:online` is running — both reach the same server.
 
 **Leave that terminal open and your machine awake for as long as you're playing**: your
-computer *is* the server. Ctrl+C ends the session, and restarting produces a new link
-(an old one fails with Cloudflare error 1033).
+computer *is* the server. Restarting produces a new link, and an old one fails with
+Cloudflare error 1033.
 
 First run needs the tunnel client, once — it's free and needs no account:
 
 ```bash
 brew install cloudflared
 ```
+
+### Stopping it
+
+Press **Ctrl+C** in the terminal running `play:online`. That stops the server and the
+tunnel together. Closing the terminal window does the same thing.
+
+There's no background service, so this is also the *only* way it stops — while that
+terminal is open your machine is serving the game, and anyone holding the link can reach
+it. Close it when you're done.
+
+If you've lost the terminal, kill it from any other one:
+
+```bash
+lsof -ti:8787 | xargs kill
+```
+
+To check whether anything is still up, `npm run link` prints the link if a tunnel is
+running and says so if not.
+
+A leftover server is worth ruling out first if `play:online` won't start: the port is
+already taken, the new server can't bind, and it takes the tunnel down with it. It'll
+tell you so — `Port 8787 is already in use` — and the `lsof` line above clears it.
 
 [`RELEASING.md`](RELEASING.md) covers the rest: same-wifi play without a tunnel, hosting
 the server permanently, and building the desktop app.

@@ -29,6 +29,19 @@ Captured for later — nothing here is being worked on yet.
   team catches on, they get to choose what card you play next
 
 ## Presentation
+- Volume controls. Levels are hardcoded today — `startMusic` takes a `fileVolume`
+  (0.35 for the music loops) and the synthesized effects each pass their own
+  `peakGain`, so there's no single place a player can turn things down and nothing
+  remembers a preference. Wants a settings control (music and effects separately is
+  the usual split), persisted per device like the server address is, and `sound.js`
+  reading from that rather than from constants at each call site.
+- Make the layout adapt to the browser window — it gets cut off at smaller sizes.
+  This matters more now than it did: the share link means people open the game on
+  phones and laptops of every size, not just the desktop window it was tuned for.
+  The table seats are already positioned in percentages, but the surrounding chrome
+  (card sizes, panel padding, the fixed-height felt, the side chat column) is not, so
+  the page overflows rather than reflowing. Vertical spacing was trimmed once before
+  for the same reason — that bought room, it didn't make it responsive.
 - ~~Compress the audio~~ — done for the one file that mattered. `lobby-music.mp3` was
   14.5 minutes at 320kbps stereo, 33MB on its own; re-encoded to 96kbps mono it's 10MB
   with the full track intact, taking `public/sounds/` from 41MB to 17MB. That weight
@@ -88,6 +101,16 @@ Captured for later — nothing here is being worked on yet.
   night, most first cuts, etc.) — needs the server to accumulate per-room history
 
 ## Leaderboard
+- A global leaderboard, shared across everyone who plays. Today's is per-machine: it
+  writes a local `leaderboard.json` (over Electron IPC in the desktop app, via a
+  dev-only Vite middleware in the browser), so two people playing the same game keep
+  entirely separate records and nobody can compare. Making it global means the server
+  owns it — which is a real change, because the server currently keeps *nothing* on
+  disk: rooms are in memory and vanish on restart. So this needs actual persistence
+  (even a JSON file on the host would do to start), and some notion of player identity
+  sturdier than a name typed into a box, or the board fills with duplicate "Rishi"s.
+  Worth deciding at the same time whether multiplayer results count toward it — they
+  deliberately don't today, since the board is a solo-progress record.
 - ~~Track each player's overall win/loss/tie record across all time, not just per-win~~
   snapshots — plus their personal best (fewest games to reach a 420)~~ — done. One row
   per player now (`leaderboard-store.js`'s `recordResult`), updated after every hand
