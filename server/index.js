@@ -575,6 +575,30 @@ wss.on("connection", (ws) => {
   ws.on("error", () => handleDisconnect(client));
 });
 
+/* The common failure is a leftover server from an earlier session still holding
+   the port. Node's default for that is an unhandled 'error' event and a stack
+   trace — and under `npm run play:online` it's worse than unhelpful, because
+   concurrently -k then kills the tunnel too, so the visible symptom is "tunnel
+   exited" and the real cause has scrolled away. Say what actually happened. */
+function handleListenError(err) {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `\n  Port ${PORT} is already in use.\n\n` +
+        `  Another copy of the game server is probably still running from an\n` +
+        `  earlier session. Stop it with:\n\n` +
+        `      lsof -ti:${PORT} | xargs kill\n\n` +
+        `  ...then try again.\n`
+    );
+    process.exit(1);
+  }
+  throw err;
+}
+/* Both, because attaching a WebSocketServer to an http server makes it re-emit
+   the listen failure on itself — handling only the http one leaves the original
+   unhandled 'error' event, and the stack trace comes back. */
+httpServer.on("error", handleListenError);
+wss.on("error", handleListenError);
+
 /* 0.0.0.0, not localhost: inside a container, binding to the loopback address
    makes the process unreachable from outside it — the single most common way a
    deploy looks healthy in logs and refuses every connection. */
