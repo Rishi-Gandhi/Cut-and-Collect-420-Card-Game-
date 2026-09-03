@@ -29,11 +29,13 @@ Captured for later — nothing here is being worked on yet.
   team catches on, they get to choose what card you play next
 
 ## Presentation
-- Compress the audio. `public/sounds/` is 41MB, nearly all of it `lobby-music.mp3` at
-  35MB, and every one of those bytes now travels twice: into each desktop build, and
-  over the host's home upload link to every friend who opens the share link. A looping
-  ambient pad does not need 35MB — re-encoding to ~96kbps mono would put it near 3MB
-  with no audible loss at background volume.
+- ~~Compress the audio~~ — done for the one file that mattered. `lobby-music.mp3` was
+  14.5 minutes at 320kbps stereo, 33MB on its own; re-encoded to 96kbps mono it's 10MB
+  with the full track intact, taking `public/sounds/` from 41MB to 17MB. That weight
+  was being paid twice — once into every desktop build, and again over the host's home
+  upload link for each friend opening the share link. 64kbps mono would reach 6.6MB if
+  it's ever worth another pass; trimming the track to a shorter loop (it repeats
+  anyway) would do far more, but changes what you actually hear.
 - ~~Sound effects~~ — done, and grown past the original scope: new-hand whoosh, card
   flip, a distinct first-cut sting, a point-scored chime, win/lose/tie fanfare. All
   synthesized with the Web Audio API in `sound.js`, no audio asset files needed. Drop
