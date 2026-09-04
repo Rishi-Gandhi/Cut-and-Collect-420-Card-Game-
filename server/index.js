@@ -25,6 +25,7 @@ import { createReadStream, stat } from "node:fs";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { readLeaderboard, recordResult } from "../leaderboard-store.js";
 import {
   SUITS,
   PLAYER_COUNTS,
@@ -42,6 +43,17 @@ import {
 } from "../shared/game-rules.js";
 
 const PORT = process.env.PORT || 8787;
+
+/* The shared leaderboard lives on whoever runs the server, in a plain JSON file
+   next to it. Unlike rooms — which are deliberately in-memory and vanish on
+   restart — a record people compare against has to outlive the process.
+
+   Reuses leaderboard-store.js, the same module Electron's IPC handlers and the
+   Vite dev API already use; it takes the path as an argument precisely so each
+   caller can decide where the file lives. */
+const LEADERBOARD_PATH =
+  process.env.LEADERBOARD_PATH ||
+  resolve(dirname(fileURLToPath(import.meta.url)), "..", "leaderboard-global.json");
 
 /* timings mirror the solo client so networked games feel identical */
 const BOT_THINK_MS = 1800;
@@ -530,8 +542,99 @@ function serveClient(req, urlPath, res) {
    as "this process is unhealthy" and restarts in a loop. It also leaves you no
    way to check whether a deploy is actually alive short of writing a WebSocket
    client. So: plain HTTP for health, upgraded to WebSocket for the game. */
+/* ---------- the shared leaderboard API ----------
+   Plain HTTP rather than a WebSocket message, because it has to work for people
+   who aren't in a room — the Home screen shows the board before anyone connects
+   to anything.
+
+   CORS is open because the client is frequently on a different origin than the
+   server: Vite on :5173 during development, and file:// in the packaged desktop
+   app. When the server is the thing serving the page they're same-origin and
+   none of this applies. The data is a public scoreboard either way. */
+function sendJson(res, status, body) {
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "access-control-allow-origin": "*",
+    "cache-control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
+
+function handleLeaderboardApi(req, res) {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type",
+      "access-control-max-age": "86400",
+    });
+    res.end();
+    return;
+  }
+
+  if (req.method === "GET") {
+    return sendJson(res, 200, readLeaderboard(LEADERBOARD_PATH));
+  }
+
+  if (req.method === "POST") {
+    let body = "";
+    let tooBig = false;
+    req.on("data", (chunk) => {
+      body += chunk;
+      // a result row is a few dozen bytes; anything larger is not a real client
+      if (body.length > 4096) {
+        tooBig = true;
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      if (tooBig) return;
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        return sendJson(res, 400, { error: "Malformed JSON." });
+      }
+      /* Validated rather than trusted: this endpoint is reachable by anyone who
+         can open the game. It can't stop someone scripting wins — that would
+         need real accounts — but it does stop a malformed or hostile payload
+         from corrupting the file everyone else's record lives in. */
+      const name = String(payload?.name ?? "").trim().slice(0, 24);
+      const result = payload?.result;
+      if (!name) return sendJson(res, 400, { error: "A name is required." });
+      if (!["win", "loss", "tie"].includes(result)) {
+        return sendJson(res, 400, { error: "result must be win, loss or tie." });
+      }
+      const pb = payload?.personalBestCandidate;
+      const personalBestCandidate =
+        Number.isInteger(pb) && pb > 0 && pb < 10000 ? pb : null;
+
+      try {
+        return sendJson(res, 200, recordResult(LEADERBOARD_PATH, { name, result, personalBestCandidate }));
+      } catch (err) {
+        console.error("leaderboard write failed", err);
+        return sendJson(res, 500, { error: "Could not save that result." });
+      }
+    });
+    return;
+  }
+
+  sendJson(res, 405, { error: "Method not allowed." });
+}
+
 const httpServer = createServer((req, res) => {
   const url = (req.url || "/").split("?")[0];
+
+  /* Deliberately NOT "/api/leaderboard": that path belongs to the Vite dev
+     server's per-device board, and since this server also serves the client,
+     a relative fetch from the page would otherwise land here and make the
+     device's own record and the shared one the same list. */
+  if (url === "/api/leaderboard/global") return handleLeaderboardApi(req, res);
+
+  /* An unmatched /api/ path must not fall through to the single-page fallback:
+     a caller expecting JSON would receive index.html and report a parse error
+     rather than "no such endpoint". */
+  if (url.startsWith("/api/")) return sendJson(res, 404, { error: `No such endpoint: ${url}` });
 
   if (url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });

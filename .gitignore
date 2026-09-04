@@ -6,3 +6,4 @@ cut-and-collect-project/leaderboard.json
 .claude/
 .env
 .tunnel-url
+leaderboard-global.json

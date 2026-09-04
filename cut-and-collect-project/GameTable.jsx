@@ -104,7 +104,10 @@ export function ChatPanel({ messages, onSend, enabled = true, disabledNote }) {
   const endRef = useRef(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    // `block: "nearest"` keeps this inside its own scroll box. Without it the
+    // browser scrolls every ancestor too, which on a short window drags the
+    // whole page down and pushes the title off the top of the screen.
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages.length]);
 
   function handleSend() {
@@ -114,7 +117,7 @@ export function ChatPanel({ messages, onSend, enabled = true, disabledNote }) {
   }
 
   return (
-    <div style={styles.chatPanel}>
+    <div className="cc-chat" style={styles.chatPanel}>
       <div style={styles.chatHeader}>CHAT</div>
       <div style={styles.chatMessages}>
         {messages.length === 0 ? (
@@ -176,7 +179,7 @@ export function GameTable({
   const logEndRef = useRef(null);
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [log.length]);
 
   /* Rotate the table so the local player is always the bottom seat. Solo play
@@ -207,7 +210,7 @@ export function GameTable({
       <style>{GLOBAL_STYLE}</style>
       {errorToast && <div style={styles.toastErr}>{errorToast}</div>}
 
-      <div style={{ ...styles.header, paddingTop: 66 }}>
+      <div className="cc-game-header" style={{ ...styles.header, paddingTop: 66 }}>
         <div style={styles.topLeftControls}>
           <button style={styles.quitBtn} onClick={onQuit}>Quit</button>
           {onAutoWin && <button style={styles.autoWinBtn} onClick={onAutoWin}>Auto Win (dev)</button>}
@@ -227,7 +230,7 @@ export function GameTable({
         <div style={styles.subtitle}>a ten-hunting trick game · {seatCount} at the table</div>
       </div>
 
-      <div style={styles.gameLayout}>
+      <div className="cc-game-layout" style={styles.gameLayout}>
         <div style={{ ...styles.body, flex: 1, minWidth: 0 }}>
           {/* scoreboard */}
           <div style={styles.scorePanel}>

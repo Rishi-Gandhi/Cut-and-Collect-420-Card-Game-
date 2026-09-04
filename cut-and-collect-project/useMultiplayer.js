@@ -97,6 +97,16 @@ export function normalizeServerUrl(input) {
   return `${isLocal ? "ws" : "wss"}://${s}${needsPort ? `:${DEFAULT_PORT}` : ""}`;
 }
 
+/* The same server, addressed over plain HTTP instead of a WebSocket — used for
+   the shared leaderboard, which has to work on the Home screen before anyone
+   has connected to anything. */
+export function httpBaseFor(wsUrl) {
+  const u = String(wsUrl || "");
+  if (u.startsWith("wss://")) return "https://" + u.slice(6);
+  if (u.startsWith("ws://")) return "http://" + u.slice(5);
+  return u;
+}
+
 function readStoredServerUrl() {
   try {
     return window.localStorage.getItem(STORAGE_KEY) || null;

@@ -19,6 +19,66 @@ export const GLOBAL_STYLE = `
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.18); }
 }
+
+/* ---------- fluid sizing ----------
+   Everything that used to be a fixed pixel size is derived from these, so the
+   whole board shrinks together instead of overflowing the window. They're CSS
+   custom properties rather than JS state because the browser then recalculates
+   them on resize with no re-render, and inline styles can reference them
+   directly with var().
+
+   The table is capped on *three* axes: its own natural size, the window width,
+   and the window height. Height is the one that actually bites on a laptop —
+   the table sits between a scoreboard and a hand of cards, so sizing it on
+   width alone is what pushes the hand off the bottom of the screen. */
+:root {
+  --card-w: clamp(38px, 4.4vw, 72px);
+  --card-h: calc(var(--card-w) * 1.389);
+  --card-rank: calc(var(--card-w) * 0.167);
+  --card-pip: calc(var(--card-w) * 0.389);
+
+  /* The height term subtracts the chrome the table has to share the window with
+     — header, scoreboard, log, and the hand of cards — rather than taking a
+     flat fraction of the viewport. A plain vh fraction looks right at one window
+     size and pushes the hand off-screen at another, because it has no idea how
+     much of the page isn't the table. */
+  /* Measured, not guessed: the header, scoreboard, log and hand together come to
+     ~440px at the sizes that matter, so this is that plus a little slack. Too
+     small and the hand hangs below the fold; too large and the table needlessly
+     shrinks on a roomy screen (where the 700px cap wins anyway). */
+  --page-chrome: 460px;
+  /* The max() is a floor on the *height*-derived term only. Below roughly this
+     width the seat labels are wider than the arc they sit on and start
+     colliding, at which point a little page scrolling is the better trade than
+     an unreadable table. Width still wins on a phone, where 92vw is smaller. */
+  --felt-min: 430px;
+  --felt-w: min(700px, 92vw, max(var(--felt-min), calc((100vh - var(--page-chrome)) * 1.687)));
+  --felt-h: calc(var(--felt-w) / 1.687);
+  --felt-w-wide: min(820px, 94vw, max(var(--felt-min), calc((100vh - var(--page-chrome)) * 1.519)));
+  --felt-h-wide: calc(var(--felt-w-wide) / 1.519);
+
+  --seat-font: clamp(9.5px, 1vw, 13px);
+  --title-font: clamp(26px, 3.4vw, 38px);
+}
+
+/* The chat column can't stay beside the table on a phone — below ~900px it
+   moves under it and becomes a short scrolling strip instead. This is the one
+   change that needs a media query, which inline styles can't express. */
+@media (max-width: 900px) {
+  .cc-game-layout { flex-direction: column !important; }
+  .cc-chat { width: 100% !important; max-height: 30vh; }
+}
+
+/* The in-game header keeps Quit and the score badges in its top corners, which
+   works while the title has room beside them. Narrow screens don't, so the
+   title steps down out of their way rather than being overlapped. */
+@media (max-width: 620px) {
+  .cc-game-header { padding-top: 96px !important; }
+}
+
+/* Long pages (Home, the end screens) scroll rather than clip. They used to be
+   pinned to exactly 100vh, which silently cut off whatever didn't fit. */
+.cc-scrollable { overflow-y: auto; -webkit-overflow-scrolling: touch; }
 `;
 
 export const styles = {
@@ -29,18 +89,22 @@ export const styles = {
     borderRadius: 16,
     padding: "14px 18px 16px",
     maxWidth: 1080,
+    width: "100%",
+    boxSizing: "border-box",
     margin: "0 auto",
     boxShadow: "0 0 0 1px #C9A24B33, 0 20px 50px rgba(0,0,0,0.5)",
     position: "relative",
   },
   homeWrap: {
-    height: "calc(100vh - 20px)",
+    minHeight: "calc(100vh - 20px)",
+    maxHeight: "calc(100vh - 20px)",
     display: "flex",
     flexDirection: "column",
     boxSizing: "border-box",
   },
   endWrap: {
-    height: "calc(100vh - 20px)",
+    minHeight: "calc(100vh - 20px)",
+    maxHeight: "calc(100vh - 20px)",
     display: "flex",
     flexDirection: "column",
     boxSizing: "border-box",
@@ -71,7 +135,7 @@ export const styles = {
   },
   title: {
     fontFamily: "'Bebas Neue', sans-serif",
-    fontSize: 38,
+    fontSize: "var(--title-font)",
     letterSpacing: 4,
     color: "#E7C878",
     textShadow: "0 2px 0 rgba(0,0,0,0.4)",
@@ -106,7 +170,7 @@ export const styles = {
 
   tableOuter: { display: "flex", justifyContent: "center" },
   tableFelt: {
-    position: "relative", width: 700, height: 415,
+    position: "relative", width: "var(--felt-w)", height: "var(--felt-h)",
     background: "radial-gradient(ellipse at center, #1b5a41 0%, #123C2E 65%, #0d2e21 100%)",
     borderRadius: "50% / 40%", border: "6px solid #3b2a17",
     boxShadow: "inset 0 0 40px rgba(0,0,0,0.5)",
@@ -115,10 +179,10 @@ export const styles = {
      out from the seat-label ring without the two overlapping — a percentage
      width here wouldn't reliably reach this size, since the table's block
      ancestor is itself sized to fit its narrower siblings, not the table */
-  tableFeltWide: { width: 820, height: 540 },
+  tableFeltWide: { width: "var(--felt-w-wide)", height: "var(--felt-h-wide)" },
   seat: { position: "absolute", transform: "translate(-50%,-50%)", textAlign: "center" },
   seatLabel: {
-    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600,
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: "var(--seat-font)", fontWeight: 600,
     color: "#cfd9c9", background: "rgba(0,0,0,0.35)", borderRadius: 6, padding: "3px 9px",
     display: "inline-flex", gap: 6, alignItems: "center",
   },
@@ -216,12 +280,12 @@ export const styles = {
   handCardBtn: { background: "none", border: "none", padding: 0, transition: "transform 0.15s" },
 
   card: {
-    width: 72, height: 100, background: "#F5EFD9", borderRadius: 8, border: "1px solid #C9A24B",
+    width: "var(--card-w)", height: "var(--card-h)", background: "#F5EFD9", borderRadius: 8, border: "1px solid #C9A24B",
     boxShadow: "0 2px 5px rgba(0,0,0,0.45)", position: "relative", fontFamily: "'IBM Plex Mono', monospace",
   },
-  cardCorner: { position: "absolute", top: 4, left: 5, fontSize: 12, fontWeight: 700, lineHeight: 1.1, textAlign: "center" },
+  cardCorner: { position: "absolute", top: "4%", left: "6%", fontSize: "var(--card-rank)", fontWeight: 700, lineHeight: 1.1, textAlign: "center" },
   cardCornerBR: { top: "auto", left: "auto", bottom: 4, right: 5, transform: "rotate(180deg)" },
-  cardCenter: { position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", fontSize: 28 },
+  cardCenter: { position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", fontSize: "var(--card-pip)" },
   cardTag: {
     position: "absolute", bottom: -18, left: "50%", transform: "translateX(-50%)",
     fontFamily: "'Bebas Neue', sans-serif", fontSize: 11, letterSpacing: 1, color: "#E7C878", whiteSpace: "nowrap",
@@ -275,6 +339,16 @@ export const styles = {
     color: "#cfd9c9", background: "rgba(255,255,255,0.03)", borderRadius: 6, padding: "8px 12px", flexWrap: "wrap",
   },
   lbRank: { color: "#E7C878", fontWeight: 700, width: 30 },
+  /* leaderboard tabs — shared board vs this device */
+  lbTabs: { display: "flex", gap: 6, marginBottom: 10, justifyContent: "center" },
+  lbTab: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: 1.5,
+    padding: "5px 12px", borderRadius: 6, cursor: "pointer",
+    background: "rgba(0,0,0,0.25)", color: "#8fa595",
+    border: "1px solid rgba(255,255,255,0.07)",
+  },
+  lbTabActive: { background: "#E7C878", color: "#1c2118", borderColor: "#E7C878", fontWeight: 700 },
+
   lbName: { fontWeight: 700, color: "#EDE6D3", minWidth: 90 },
   lbDetail: { flex: 1, color: "#A9C2AE" },
   lbDate: { color: "#6b6250", fontSize: 11.5 },

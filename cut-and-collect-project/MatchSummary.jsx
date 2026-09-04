@@ -100,7 +100,7 @@ export function MatchSummary({ summary, onPlayAgain, onHome }) {
   const youWon = !isTie && winningTeam === yourTeam;
 
   return (
-    <div style={{ ...styles.wrap, ...styles.endWrap }}>
+    <div className="cc-scrollable" style={{ ...styles.wrap, ...styles.endWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>

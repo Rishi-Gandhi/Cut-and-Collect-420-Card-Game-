@@ -18,7 +18,7 @@ import { styles, GLOBAL_STYLE } from "./styles.js";
 import { GameTable } from "./GameTable.jsx";
 import { MatchSummary } from "./MatchSummary.jsx";
 import { UpdateBanner } from "./UpdateBanner.jsx";
-import { useMultiplayer, normalizeServerUrl } from "./useMultiplayer.js";
+import { useMultiplayer, normalizeServerUrl, httpBaseFor } from "./useMultiplayer.js";
 import {
   unlockAudio,
   playNewGame,
@@ -53,7 +53,16 @@ function getSeatNames(playerName, seatCount) {
    straight to the main process over IPC, no server needed — this is what makes it
    work in a packaged .app. In a plain browser it falls back to the small dev-only
    API added in vite.config.js. ---------- */
+/* Whether *this device* has anywhere to keep its own record. Electron has a
+   real file over IPC; `npm run dev` has the Vite middleware. A production build
+   served by the game server has neither — which is every friend who opens the
+   share link — so the local tab has to say so rather than show an empty board
+   and imply their games weren't counted. */
+export const hasLocalLeaderboard = () =>
+  typeof window !== "undefined" && (!!window.leaderboardAPI || !!import.meta.env?.DEV);
+
 async function loadLeaderboard() {
+  if (!hasLocalLeaderboard()) return [];
   if (window.leaderboardAPI) {
     try {
       return await window.leaderboardAPI.load();
@@ -69,11 +78,44 @@ async function loadLeaderboard() {
     return [];
   }
 }
+/* ---------- the shared leaderboard ----------
+   Lives on the multiplayer server rather than this device, so everyone playing
+   against the same server sees one ranking. Deliberately additive: the local
+   board above still records exactly as it did, which is what keeps solo play
+   working with no server running — the packaged desktop app is used that way
+   most of the time.
+
+   Solo results only, matching what the board has always meant ("fewest hands to
+   reach a 420"). Multiplayer keeps its match summary and records nothing here. */
+async function loadGlobalLeaderboard(serverUrl) {
+  try {
+    const res = await fetch(`${httpBaseFor(serverUrl)}/api/leaderboard/global`);
+    if (!res.ok) throw new Error("bad response");
+    return await res.json();
+  } catch {
+    return null; // null means "couldn't reach it", distinct from an empty board
+  }
+}
+async function recordGlobalResult(serverUrl, payload) {
+  try {
+    const res = await fetch(`${httpBaseFor(serverUrl)}/api/leaderboard/global`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error("bad response");
+    return await res.json();
+  } catch {
+    return null; // a server being down must never interrupt a game
+  }
+}
+
 /* Records the outcome of one hand (win/loss/tie) against the player's lifetime
    record. personalBestCandidate is only passed on an actual "420" mercy win —
    that's the only time "fewest games to reach 420" applies. */
 async function recordHandResult(name, result, personalBestCandidate = null) {
   const payload = { name, result, personalBestCandidate };
+  if (!hasLocalLeaderboard()) return null;
   if (window.leaderboardAPI) {
     try {
       return await window.leaderboardAPI.save(payload);
@@ -103,6 +145,10 @@ export default function TenSuitCutGame() {
   const [botDifficulty, setBotDifficulty] = useState("normal");
   const [turnTimeLimit, setTurnTimeLimit] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
+  /* null while unknown or unreachable — which the UI needs to tell apart from a
+     board that's simply empty, since one asks you to start a server and the
+     other asks you to play a game. */
+  const [globalLeaderboard, setGlobalLeaderboard] = useState(null);
   const [winResult, setWinResult] = useState(null);
   const [matchSummary, setMatchSummary] = useState(null);
 
@@ -115,12 +161,19 @@ export default function TenSuitCutGame() {
     loadLeaderboard().then(setLeaderboard);
   }, []);
 
+  const refreshGlobal = useCallback(() => {
+    loadGlobalLeaderboard(mp.serverUrl).then(setGlobalLeaderboard);
+  }, [mp.serverUrl]);
+  // re-fetched when the server address changes, since that's a different board
+  useEffect(() => { refreshGlobal(); }, [refreshGlobal]);
+
   // The win/loss/tie record and personal best are already saved per-hand by the
   // game screens (every hand counts, not just the final victory) — this just
   // re-fetches the now-current leaderboard and builds the End screen banner.
   async function handleUserWin(details) {
     const updated = await loadLeaderboard();
     setLeaderboard(updated);
+    refreshGlobal();
     setWinResult({
       name: (playerName || "").trim() || "You",
       gameNumber: details.gameNumber,
@@ -158,6 +211,9 @@ export default function TenSuitCutGame() {
         turnTimeLimit={turnTimeLimit} setTurnTimeLimit={setTurnTimeLimit}
         onStart={() => setScreen(mode === "solo" ? "solo" : "lobby")}
         leaderboard={leaderboard}
+        globalLeaderboard={globalLeaderboard}
+        serverUrl={mp.serverUrl}
+        onRefreshGlobal={refreshGlobal}
       />
     );
   }
@@ -181,6 +237,9 @@ export default function TenSuitCutGame() {
       <EndScreen
         result={winResult}
         leaderboard={leaderboard}
+        globalLeaderboard={globalLeaderboard}
+        serverUrl={mp.serverUrl}
+        onRefreshGlobal={refreshGlobal}
         onPlayAgain={() => {
           setWinResult(null);
           setScreen(mode === "solo" ? "solo" : "lobby");
@@ -219,6 +278,7 @@ export default function TenSuitCutGame() {
       playerCount={playerCount}
       botDifficulty={botDifficulty}
       turnTimeLimit={turnTimeLimit}
+      serverUrl={mp.serverUrl}
       onUserWin={handleUserWin}
       onQuit={goHome}
     />
@@ -229,7 +289,7 @@ export default function TenSuitCutGame() {
 function HomeScreen({
   playerName, setPlayerName, mode, setMode, playerCount, setPlayerCount,
   botDifficulty, setBotDifficulty, turnTimeLimit, setTurnTimeLimit,
-  onStart, leaderboard,
+  onStart, leaderboard, globalLeaderboard, serverUrl, onRefreshGlobal,
 }) {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const canStart = playerName.trim().length > 0;
@@ -240,7 +300,7 @@ function HomeScreen({
   }, []);
 
   return (
-    <div style={{ ...styles.wrap, ...styles.homeWrap }}>
+    <div className="cc-scrollable" style={{ ...styles.wrap, ...styles.homeWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -344,7 +404,14 @@ function HomeScreen({
           </button>
         </div>
 
-        {showLeaderboard && <Leaderboard entries={leaderboard} />}
+        {showLeaderboard && (
+          <Leaderboard
+            entries={leaderboard}
+            globalEntries={globalLeaderboard}
+            serverUrl={serverUrl}
+            onRefreshGlobal={onRefreshGlobal}
+          />
+        )}
 
         <div style={styles.rulesPanel}>
           <div style={styles.rulesTitle}>HOW TO PLAY</div>
@@ -471,7 +538,7 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
   const dotColor = status === "connected" ? "#7CFC8A" : status === "connecting" ? "#E7C878" : "#E86A6A";
 
   return (
-    <div style={{ ...styles.wrap, ...styles.homeWrap }}>
+    <div className="cc-scrollable" style={{ ...styles.wrap, ...styles.homeWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -571,7 +638,7 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
 /* ---------- solo game ----------
    Runs the whole game locally: the same shared rule functions the server uses,
    just driven by React state and local timers instead of sockets. */
-function SoloGameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, onUserWin, onQuit }) {
+function SoloGameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit, serverUrl, onUserWin, onQuit }) {
   const seatCount = playerCount;
   const botSettings = BOT_DIFFICULTY_SETTINGS[botDifficulty];
   const seatNamesRef = useRef(getSeatNames(playerName, seatCount));
@@ -636,14 +703,28 @@ function SoloGameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit,
 
   /* every hand's outcome counts toward the lifetime record; personalBest only
      moves on an actual mercy win for Team A (the human's team in solo) */
+  /* One write per hand. The effect can re-run while a hand sits finished — a
+     re-render with a fresh `result` object, or anything else in the dependency
+     list moving — and without this a single win lands on the board twice. */
+  const recordedHand = useRef(null);
   useEffect(() => {
     if (game.phase !== "handOver" || !game.result) return;
+    const stamp = `${game.gameNumber}:${game.result.type}:${game.result.team ?? ""}`;
+    if (recordedHand.current === stamp) return;
+    recordedHand.current = stamp;
+
     const { type, team } = game.result;
     const name = (playerName || "").trim() || "You";
-    if (type === "earlyTie") recordHandResult(name, "tie");
-    else if (type === "mercy") recordHandResult(name, team === "A" ? "win" : "loss", team === "A" ? game.gameNumber : null);
-    else recordHandResult(name, team === "A" ? "win" : "loss");
-  }, [game.phase, game.result]);
+    const outcome = type === "earlyTie" ? "tie" : team === "A" ? "win" : "loss";
+    // personal best only applies to an actual 420, and only when it's yours
+    const pb = type === "mercy" && team === "A" ? game.gameNumber : null;
+
+    recordHandResult(name, outcome, pb);
+    /* Same result to the shared board, if a server is reachable. Fire-and-forget
+       on purpose: this runs as a hand ends, and a slow or absent server must
+       never hold up the next deal. Failures are swallowed inside the helper. */
+    recordGlobalResult(serverUrl, { name, result: outcome, personalBestCandidate: pb });
+  }, [game.phase, game.result, playerName, serverUrl]);
 
   /* bot turns */
   useEffect(() => {
@@ -860,7 +941,7 @@ function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
      would otherwise render a table nobody is sitting at any more. */
   if (closedReason) {
     return (
-      <div style={{ ...styles.wrap, ...styles.homeWrap }}>
+      <div className="cc-scrollable" style={{ ...styles.wrap, ...styles.homeWrap }}>
         <style>{GLOBAL_STYLE}</style>
         <div style={styles.header}>
           <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -881,7 +962,7 @@ function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
 
   if (!view || !view.started) {
     return (
-      <div style={{ ...styles.wrap, ...styles.homeWrap }}>
+      <div className="cc-scrollable" style={{ ...styles.wrap, ...styles.homeWrap }}>
         <style>{GLOBAL_STYLE}</style>
         <div style={styles.header}>
           <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -963,14 +1044,14 @@ function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
 }
 
 /* ---------- end screen ---------- */
-function EndScreen({ result, leaderboard, onPlayAgain, onHome }) {
+function EndScreen({ result, leaderboard, globalLeaderboard, serverUrl, onRefreshGlobal, onPlayAgain, onHome }) {
   useEffect(() => {
     startEndMusic();
     return () => stopBackgroundMusic();
   }, []);
 
   return (
-    <div style={{ ...styles.wrap, ...styles.endWrap }}>
+    <div className="cc-scrollable" style={{ ...styles.wrap, ...styles.endWrap }}>
       <style>{GLOBAL_STYLE}</style>
       <div style={styles.header}>
         <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -989,19 +1070,65 @@ function EndScreen({ result, leaderboard, onPlayAgain, onHome }) {
       </div>
 
       <div style={styles.endLeaderboardWrap}>
-        <Leaderboard entries={leaderboard} />
+        <Leaderboard
+          entries={leaderboard}
+          globalEntries={globalLeaderboard}
+          serverUrl={serverUrl}
+          onRefreshGlobal={onRefreshGlobal}
+        />
       </div>
     </div>
   );
 }
 
-function Leaderboard({ entries }) {
-  const top = entries.slice(0, 10);
+/* Two boards, because they answer different questions: the shared one ranks
+   everyone playing against this server, the local one is this device's own
+   record and is the only one that exists when no server is running (which is
+   how the packaged app is usually used). Shown as tabs rather than two panels
+   so the screen doesn't double in height. */
+function Leaderboard({ entries, globalEntries, serverUrl, onRefreshGlobal }) {
+  // default to the shared view when there is one, since that's the new thing
+  const [tab, setTab] = useState("global");
+  const reachable = globalEntries !== null;
+  const showing = tab === "global" ? (globalEntries || []) : entries;
+  const top = showing.slice(0, 10);
+
   return (
     <div style={styles.leaderboardPanel}>
       <div style={styles.leaderboardTitle}>LEADERBOARD</div>
-      {top.length === 0 ? (
-        <div style={styles.leaderboardEmpty}>No hands recorded yet — be the first!</div>
+      <div style={styles.lbTabs}>
+        <button
+          style={{ ...styles.lbTab, ...(tab === "global" ? styles.lbTabActive : {}) }}
+          onClick={() => { setTab("global"); onRefreshGlobal?.(); }}
+        >
+          GLOBAL
+        </button>
+        <button
+          style={{ ...styles.lbTab, ...(tab === "local" ? styles.lbTabActive : {}) }}
+          onClick={() => setTab("local")}
+        >
+          LOCAL
+        </button>
+      </div>
+
+      {tab === "local" && !hasLocalLeaderboard() ? (
+        <div style={styles.leaderboardEmpty}>
+          This device keeps no record of its own — you're playing in a browser served by
+          someone else's machine, so your results go to the shared <b>GLOBAL</b> board
+          instead. The desktop app keeps a private record here.
+        </div>
+      ) : tab === "global" && !reachable ? (
+        <div style={styles.leaderboardEmpty}>
+          Can't reach the shared board at {serverUrl || "the server"}.<br />
+          Start one with <b>npm run play:online</b>, or check the SERVER address in the
+          multiplayer lobby. Your own record is still under <b>LOCAL</b>.
+        </div>
+      ) : top.length === 0 ? (
+        <div style={styles.leaderboardEmpty}>
+          {tab === "global"
+            ? "Nobody has finished a hand on this server yet — be the first!"
+            : "No hands recorded on this device yet — be the first!"}
+        </div>
       ) : (
         <div style={styles.leaderboardTable}>
           {top.map((e, i) => (
