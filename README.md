@@ -30,6 +30,20 @@ them. Lost the link? `npm run link` prints it again.
 To host the game yourself, either open that same link, or use the desktop app while
 `play:online` is running — both reach the same server.
 
+### If someone drops, or turns up late
+
+Nobody's night ends because of one bad connection:
+
+- **A dropped player keeps their seat for three minutes.** A bot covers it meanwhile, so
+  the hand carries on. A brief blip reconnects on its own; someone who closed the tab
+  gets a **Rejoin room XXXX** button on the home screen when they reopen the link.
+- **The host leaving no longer ends the game.** Host duties move to another player
+  automatically, and the host can hand them over deliberately from the lobby
+  ("Make host"). Ending the table for everyone is a separate **End Table** button.
+- **A full or already-started room can be watched.** Latecomers are offered a spectator
+  view — the table, the chat, and how many cards everyone holds, but nobody's actual
+  cards. If a seat frees up they can take it from there.
+
 **Leave that terminal open and your machine awake for as long as you're playing**: your
 computer *is* the server. Restarting produces a new link, and an old one fails with
 Cloudflare error 1033.

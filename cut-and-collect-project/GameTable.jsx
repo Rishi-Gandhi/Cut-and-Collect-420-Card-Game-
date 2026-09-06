@@ -123,13 +123,25 @@ export function ChatPanel({ messages, onSend, enabled = true, disabledNote }) {
         {messages.length === 0 ? (
           <div style={styles.chatEmpty}>{enabled ? "No messages yet — say hello!" : disabledNote}</div>
         ) : (
-          messages.map((m, i) => (
-            <div key={i} style={styles.chatLine}>
-              <span style={styles.chatName}>{m.name}</span>
-              <span style={styles.chatTeam}> ({TEAM_SHORT[m.team]})</span>
-              <span style={styles.chatText}>: {m.text}</span>
-            </div>
-          ))
+          /* Three kinds of line share this list: the server narrating what
+             happened to the table, a watcher talking, and a player talking.
+             Only the last of those has a team to be posted under. */
+          messages.map((m, i) =>
+            m.system ? (
+              <div key={i} style={{ ...styles.chatLine, ...styles.chatSystemLine }}>
+                {m.text}
+              </div>
+            ) : (
+              <div key={i} style={styles.chatLine}>
+                <span style={styles.chatName}>{m.name}</span>
+                <span style={styles.chatTeam}>
+                  {" "}
+                  ({m.spectator ? "watching" : TEAM_SHORT[m.team]})
+                </span>
+                <span style={styles.chatText}>: {m.text}</span>
+              </div>
+            )
+          )
         )}
         <div ref={endRef} />
       </div>
@@ -159,10 +171,14 @@ export function ChatPanel({ messages, onSend, enabled = true, disabledNote }) {
 export function GameTable({
   view,          // normalized game view (see below)
   outcomes,      // { win, loss, tie } from this player's perspective
+  outcomeLabels = ["W", "L", "T"], // relabelled for spectators, who have no side
   onPlay,
   onQuit,
   onAutoWin,     // solo-only dev shortcut; omitted in multiplayer
+  onClaimSeat,   // multiplayer-only: a spectator taking a seat that came free
+  onEndTable,    // multiplayer-only: the host deliberately closing the room
   resultBanner,  // node rendered when the hand is over (differs per mode)
+  statusBanner,  // transient line across the top (e.g. "reconnecting…")
   chatMessages, onSendChat, chatEnabled, chatDisabledNote,
   timeLeft, turnTimeLimit,
   headerBadge,   // extra node in the top-right (e.g. the room code)
@@ -184,10 +200,15 @@ export function GameTable({
 
   /* Rotate the table so the local player is always the bottom seat. Solo play
      is always seat 0 so this is a no-op there, but online you might be seat 3
-     and still expect to be looking at your own hand from the bottom. */
-  const displayIndex = (seat) => (seat - yourSeat + seatCount) % seatCount;
+     and still expect to be looking at your own hand from the bottom.
 
-  const yourTurn = phase === "playing" && turn === yourSeat;
+     A spectator has no seat to anchor on (`yourSeat` is null), so the table is
+     shown unrotated, from seat 0 — the neutral view, since no chair is theirs. */
+  const spectating = yourSeat == null;
+  const anchorSeat = yourSeat ?? 0;
+  const displayIndex = (seat) => (seat - anchorSeat + seatCount) % seatCount;
+
+  const yourTurn = !spectating && phase === "playing" && turn === yourSeat;
   const currentWinner = trick.length > 0 ? evaluateWinner(trick, rankValue) : null;
 
   /* Legality is re-derived here from the same shared rules the server uses, so
@@ -209,21 +230,25 @@ export function GameTable({
     <div style={{ ...styles.wrap, ...styles.gameWrap }}>
       <style>{GLOBAL_STYLE}</style>
       {errorToast && <div style={styles.toastErr}>{errorToast}</div>}
+      {statusBanner && <div style={styles.toastInfo}>{statusBanner}</div>}
 
       <div className="cc-game-header" style={{ ...styles.header, paddingTop: 66 }}>
         <div style={styles.topLeftControls}>
           <button style={styles.quitBtn} onClick={onQuit}>Quit</button>
+          {onEndTable && (
+            <button style={styles.endTableBtn} onClick={onEndTable}>End Table</button>
+          )}
           {onAutoWin && <button style={styles.autoWinBtn} onClick={onAutoWin}>Auto Win (dev)</button>}
         </div>
         <div style={styles.topRightControls}>
           {headerBadge}
           <div style={styles.gameCounter}>GAME #{gameNumber}</div>
           <div style={styles.outcomesCounter}>
-            <span style={styles.outcomeWin}>W {outcomes.win}</span>
+            <span style={styles.outcomeWin}>{outcomeLabels[0]} {outcomes.win}</span>
             {" · "}
-            <span style={styles.outcomeLoss}>L {outcomes.loss}</span>
+            <span style={styles.outcomeLoss}>{outcomeLabels[1]} {outcomes.loss}</span>
             {" · "}
-            <span style={styles.outcomeTie}>T {outcomes.tie}</span>
+            <span style={styles.outcomeTie}>{outcomeLabels[2]} {outcomes.tie}</span>
           </div>
         </div>
         <div style={styles.title}>CUT &amp; COLLECT</div>
@@ -269,6 +294,10 @@ export function GameTable({
                     <div style={styles.seatHandCount}>
                       {seat === yourSeat ? "" : `${handCounts[seat]} cards`}
                     </div>
+                    {/* who is actually behind each chair — only meaningful
+                        online, where a seat can be temporarily bot-played
+                        while its owner reconnects */}
+                    {view.seatAway?.[seat] && <div style={styles.seatAwayTag}>reconnecting…</div>}
                     {/* someone else is on the clock — worth seeing, since online
                         you're otherwise just waiting with no idea how long */}
                     {seat !== yourSeat && turn === seat && phase === "playing" &&
@@ -302,7 +331,11 @@ export function GameTable({
 
               {trick.length === 0 && phase === "playing" && (
                 <div style={styles.tableCenterNote}>
-                  {turn === yourSeat ? "Your lead — pick a card" : `waiting on ${seatNames[turn]}...`}
+                  {spectating
+                    ? `waiting on ${seatNames[turn]}...`
+                    : turn === yourSeat
+                    ? "Your lead — pick a card"
+                    : `waiting on ${seatNames[turn]}...`}
                 </div>
               )}
             </div>
@@ -319,7 +352,34 @@ export function GameTable({
           {/* result banner */}
           {phase === "handOver" && resultBanner}
 
-          {/* your hand */}
+          {/* your hand — or, for a spectator, the seat-taking offer that
+              replaces it, since there are no cards to show and an empty rack
+              would read as a bug */}
+          {spectating ? (
+            <div style={styles.handPanel}>
+              <div style={styles.handHeader}>
+                WATCHING
+                <span style={styles.spectatorPing}>● spectator — you're not holding cards</span>
+              </div>
+              {onClaimSeat && view.seatOpen?.some(Boolean) ? (
+                <div style={styles.spectatorSeatRow}>
+                  <span style={styles.spectatorSeatNote}>Free seat — jump in:</span>
+                  {view.seatOpen.map((open, i) =>
+                    open ? (
+                      <button key={i} style={styles.spectatorSeatBtn} onClick={() => onClaimSeat(i)}>
+                        Take seat {i + 1}
+                      </button>
+                    ) : null
+                  )}
+                </div>
+              ) : (
+                <div style={styles.spectatorSeatNote}>
+                  Every seat is taken or being held for a player who dropped. If one frees
+                  up, you'll be able to take it from here.
+                </div>
+              )}
+            </div>
+          ) : (
           <div style={styles.handPanel}>
             <div style={styles.handHeader}>
               YOUR HAND {yourTurn && <span style={styles.turnPing}>● your turn</span>}
@@ -351,6 +411,7 @@ export function GameTable({
               })}
             </div>
           </div>
+          )}
         </div>
 
         <ChatPanel

@@ -133,6 +133,13 @@ export const styles = {
     color: "#8fa595", background: "transparent", border: "1px dashed #6b6250", borderRadius: 6,
     padding: "4px 8px", cursor: "pointer",
   },
+  /* Host-only, and destructive for everyone else at the table, so it reads as
+     a warning rather than as another neutral control next to Quit. */
+  endTableBtn: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: 1,
+    color: "#E86A6A", background: "transparent", border: "1px solid #E86A6A55", borderRadius: 6,
+    padding: "5px 10px", cursor: "pointer",
+  },
   title: {
     fontFamily: "'Bebas Neue', sans-serif",
     fontSize: "var(--title-font)",
@@ -197,6 +204,13 @@ export const styles = {
     color: "#E7C878", marginTop: 1,
   },
   seatTimerLow: { color: "#E86A6A" },
+  /* A seat whose player dropped and is expected back. Amber rather than red:
+     a bot is covering the chair, so the table is fine — this is information,
+     not a fault. */
+  seatAwayTag: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: 0.5,
+    color: "#E7C878", marginTop: 1, opacity: 0.85,
+  },
 
   /* ---- server address picker (multiplayer lobby) ---- */
   serverRow: {
@@ -276,6 +290,19 @@ export const styles = {
     display: "inline-block", transformOrigin: "center",
   },
   turnTimerLow: { color: "#E86A6A", animation: "timerPulse 0.6s ease-in-out infinite" },
+  /* What fills the hand panel when you're watching rather than playing */
+  spectatorPing: { color: "#8ab4ff", fontWeight: 700, fontSize: 12, letterSpacing: 0 },
+  spectatorSeatRow: {
+    display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "center",
+  },
+  spectatorSeatNote: {
+    fontSize: 13, color: "#8fa595", textAlign: "center", maxWidth: 460, lineHeight: 1.5,
+  },
+  spectatorSeatBtn: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 1,
+    background: "#14432f", color: "#EDE6D3", border: "1px solid #E7C878",
+    borderRadius: 6, padding: "8px 14px", cursor: "pointer",
+  },
   handRow: { display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" },
   handCardBtn: { background: "none", border: "none", padding: 0, transition: "transform 0.15s" },
 
@@ -377,6 +404,9 @@ export const styles = {
   chatName: { fontWeight: 700, color: "#E7C878" },
   chatTeam: { fontSize: 11, color: "#8fa595" },
   chatText: { color: "#cfd9c9" },
+  /* server narration (someone dropped, host moved, a watcher sat down) — set
+     apart from conversation so it reads as the room talking, not a player */
+  chatSystemLine: { color: "#8fa595", fontStyle: "italic", fontSize: 12 },
   chatInputRow: {
     display: "flex", gap: 6, padding: "8px 12px", borderTop: "1px solid rgba(255,255,255,0.08)",
   },
@@ -423,6 +453,25 @@ export const styles = {
   lobbySeatName: { flex: 1, color: "#EDE6D3" },
   lobbySeatTag: { fontSize: 11, color: "#8fa595", letterSpacing: 1 },
   lobbySeatYou: { color: "#7CFC8A", fontWeight: 700 },
+  makeHostBtn: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: 0.5,
+    color: "#E7C878", background: "transparent", border: "1px solid #E7C87855",
+    borderRadius: 5, padding: "3px 8px", cursor: "pointer", whiteSpace: "nowrap",
+  },
+  /* Offers that appear above the join controls — rejoining a room you dropped
+     out of, or watching one that couldn't seat you. Set apart from the plain
+     lobby card so they read as "here's a way in", not as more menu. */
+  rejoinCard: {
+    display: "flex", flexDirection: "column", gap: 8,
+    background: "rgba(231,200,120,0.07)", border: "1px solid #E7C87844",
+    borderRadius: 8, padding: "12px 14px",
+    // matches the home/lobby cards it sits above rather than spanning the page
+    width: "100%", maxWidth: 460, boxSizing: "border-box", alignSelf: "center",
+  },
+  rejoinTitle: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: 0.5,
+    color: "#E7C878", fontWeight: 700,
+  },
   lobbyErr: {
     fontSize: 13, color: "#E86A6A", background: "rgba(232,106,106,0.1)",
     border: "1px solid #E86A6A55", borderRadius: 6, padding: "8px 12px", textAlign: "center",
@@ -444,6 +493,15 @@ export const styles = {
     background: "#5c1f1f", color: "#FFD9D9", border: "1px solid #E86A6A",
     borderRadius: 6, padding: "8px 16px", fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 12.5, zIndex: 50, boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+  },
+  /* Same slot as the error toast but amber: something is being handled (a
+     reconnect in flight), not something that went wrong. Sits below the error
+     toast's position so the two don't overlap if both are up. */
+  toastInfo: {
+    position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
+    background: "#463714", color: "#F5E4B8", border: "1px solid #E7C878",
+    borderRadius: 6, padding: "8px 16px", fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 12.5, zIndex: 49, boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
   },
 
   /* ---- auto-update banner ---- */

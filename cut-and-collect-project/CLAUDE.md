@@ -38,10 +38,31 @@ out illegal cards precisely so the UI can't disagree with what the server will a
 - **Hidden information is enforced server-side.** `buildView()` sends each player their
   own hand plus *card counts* for everyone else. Never widen that to the full state —
   it would put every opponent's cards in the browser's network tab.
-- **Empty seats are bots.** A non-host disconnecting hands their seat to a bot and the
-  table plays on. **The host disconnecting ends the game for everyone** — the server
-  sends `roomClosed` and deletes the room, since the host is the only seat that can deal
-  the next hand. Rooms are in-memory only; a restart drops them.
+- **Empty seats are bots**, but "empty" has two meanings and nearly every seat rule
+  turns on the difference. A seat whose player *dropped* is **reserved** — a bot covers
+  it so the table never stalls, but it stays theirs (`SEAT_HOLD_MS`, 3 min) and nobody
+  else may take it. A seat that is **open** — never occupied, or its hold lapsed — can
+  be claimed by a spectator. `seatIsReserved`/`seatIsOpen` are the only correct way to
+  ask; `!clientId` alone would hand a dropped player's seat to the next stranger.
+- **Reconnecting is by token, not by name or connection.** Sitting down mints a random
+  per-seat token; the client keeps it in localStorage and sends it back with `resume`.
+  Anything weaker would let one player walk into another's seat and be dealt their hand.
+  The token has no expiry of its own — `SEAT_HOLD_MS` governs how long the seat is
+  *withheld from others*, and claiming a lapsed seat mints a fresh token, which
+  invalidates the old one.
+- **A dropped host no longer ends the table.** The job is promoted to another connected
+  player (or held, if nobody is left to inherit, so a returning host gets it back), and
+  the host can also hand it over deliberately with `transferHost`. Closing the room for
+  everyone is now an explicit `closeRoom` message. The old behaviour — host drops,
+  everyone's night ends — was a cure worse than the disease.
+- **Rooms are parked, not deleted, when the last person leaves** (`EMPTY_ROOM_GRACE_MS`).
+  Game timers stop, but the room survives long enough to be reconnected to; otherwise
+  there would be nothing to come back to. Still in-memory only — a restart drops them.
+- **Spectators hold no seat, and that *is* the security model.** `client.seat == null`
+  is what every action handler checks, and what makes `buildView` withhold every hand:
+  no seat means no hand to fill in, so a watcher receives only the public table. Never
+  "fix" a spectator's empty hand by sending them the raw state — anyone can open a
+  second tab on the room they're playing in.
 - Sound in multiplayer is driven by *diffing successive server snapshots* (new hand on
   `gameNumber`, first-cut sting on `cutSuit` going null → set), not by a local play
   handler like solo has. Adding a new cue means adding it in both places.

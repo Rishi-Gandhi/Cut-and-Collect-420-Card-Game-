@@ -201,6 +201,16 @@ export default function TenSuitCutGame() {
     setScreen("home");
   }
 
+  /* Walking back into a game after a reload or a crash. Routed through the
+     lobby rather than straight to the table because the lobby is what already
+     knows how to wait for a snapshot and then follow `started` into the game —
+     and it's where a failed rejoin can explain itself. */
+  function handleRejoin() {
+    setMode("multiplayer");
+    setScreen("lobby");
+    mp.resumeSession();
+  }
+
   if (screen === "home") {
     return (
       <HomeScreen
@@ -214,6 +224,8 @@ export default function TenSuitCutGame() {
         globalLeaderboard={globalLeaderboard}
         serverUrl={mp.serverUrl}
         onRefreshGlobal={refreshGlobal}
+        resumable={mp.resumable}
+        onRejoin={handleRejoin}
       />
     );
   }
@@ -290,6 +302,7 @@ function HomeScreen({
   playerName, setPlayerName, mode, setMode, playerCount, setPlayerCount,
   botDifficulty, setBotDifficulty, turnTimeLimit, setTurnTimeLimit,
   onStart, leaderboard, globalLeaderboard, serverUrl, onRefreshGlobal,
+  resumable, onRejoin,
 }) {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const canStart = playerName.trim().length > 0;
@@ -306,6 +319,21 @@ function HomeScreen({
         <div style={styles.title}>CUT &amp; COLLECT</div>
         <div style={styles.subtitle}>a ten-hunting trick game · {playerCount} at the table</div>
       </div>
+
+      {/* A reload or a crash lands here, not in the lobby — so this is where the
+          way back into a game in progress has to be. The server holds the seat
+          for a few minutes; after that this button will politely fail and say so. */}
+      {resumable && (
+        <div style={styles.rejoinCard}>
+          <div style={styles.rejoinTitle}>You're still in room {resumable.code}</div>
+          <div style={styles.lobbyHint}>
+            A bot is covering your seat until you're back.
+          </div>
+          <button style={styles.dealBtn} onClick={onRejoin}>
+            Rejoin room {resumable.code} →
+          </button>
+        </div>
+      )}
 
       <div style={styles.homeBody}>
         <UpdateBanner />
@@ -504,7 +532,7 @@ function ServerPicker({ mp }) {
 function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit, onEnterGame, onBack }) {
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const { status, view, error, code, seat, serverUrl } = mp;
+  const { status, view, error, code, seat, serverUrl, joinRejection, spectating, resumable } = mp;
 
   /* Its own loop rather than carrying the Home one over — waiting for people to
      file in is a different mood from browsing the menu. Stops on unmount so it
@@ -530,10 +558,23 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
     await mp.joinRoom(joinCode.trim().toUpperCase(), playerName);
     setBusy(false);
   }
+  /* Taking up the offer the server made when it couldn't seat us. A room that's
+     already under way sends us straight to the table, since there's no lobby
+     left to wait in. */
+  async function handleSpectate() {
+    setBusy(true);
+    await mp.spectateRoom((joinRejection?.code || joinCode).trim().toUpperCase(), playerName);
+    setBusy(false);
+  }
+  async function handleRejoin() {
+    setBusy(true);
+    await mp.resumeSession(resumable);
+    setBusy(false);
+  }
 
   const inRoom = !!code && !!view;
-  const isHost = inRoom && seat === view.hostSeat;
-  const humansIn = inRoom ? view.seatIsBot.filter((b) => !b).length : 0;
+  const isHost = inRoom && !spectating && seat === view.hostSeat;
+  const humansIn = inRoom ? view.seatConnected.filter(Boolean).length : 0;
 
   const dotColor = status === "connected" ? "#7CFC8A" : status === "connecting" ? "#E7C878" : "#E86A6A";
 
@@ -547,6 +588,10 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
 
       <div style={styles.lobbyBody}>
         {error && <div style={styles.lobbyErr}>{error}</div>}
+        {/* A rejoin that came too late — the seat was taken or the room closed.
+            Shown here rather than swallowed, since the offer that led here has
+            just disappeared and that needs accounting for. */}
+        {mp.closedReason && <div style={styles.lobbyErr}>{mp.closedReason}</div>}
 
         {!inRoom ? (
           <div style={styles.lobbyCard}>
@@ -555,6 +600,51 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
               {status === "connected" ? "connected" : status === "connecting" ? "connecting…" : "not connected"}
             </div>
             <ServerPicker mp={mp} />
+
+            {/* A ticket left over from a closed tab or a reload. Offered rather
+                than acted on automatically — being dropped back into a game
+                unasked, possibly hours later, would be worse than a button. */}
+            {resumable && (
+              <div style={styles.rejoinCard}>
+                <div style={styles.rejoinTitle}>You were in room {resumable.code}</div>
+                <div style={styles.lobbyHint}>
+                  Your seat is held for a few minutes after a disconnect — a bot covers it
+                  until you're back.
+                </div>
+                <button
+                  style={{ ...styles.dealBtn, ...(busy ? styles.dealBtnDisabled : {}) }}
+                  disabled={busy}
+                  onClick={handleRejoin}
+                >
+                  Rejoin room {resumable.code}
+                </button>
+              </div>
+            )}
+
+            {/* The server couldn't seat us, but said we could watch */}
+            {joinRejection && (
+              <div style={styles.rejoinCard}>
+                <div style={styles.rejoinTitle}>{joinRejection.message}</div>
+                {joinRejection.canSpectate ? (
+                  <>
+                    <div style={styles.lobbyHint}>
+                      You can watch instead — you'll see the table and the chat, but not
+                      anyone's cards. If a seat frees up you can take it from there.
+                    </div>
+                    <button
+                      style={{ ...styles.dealBtn, ...(busy ? styles.dealBtnDisabled : {}) }}
+                      disabled={busy}
+                      onClick={handleSpectate}
+                    >
+                      Watch room {joinRejection.code} →
+                    </button>
+                  </>
+                ) : (
+                  <div style={styles.lobbyHint}>That room can't take any more watchers either.</div>
+                )}
+                <button style={styles.trashBtn} onClick={mp.dismissJoinRejection}>Never mind</button>
+              </div>
+            )}
 
             <label style={styles.homeLabel}>HOST A NEW GAME</label>
             <div style={styles.lobbyHint}>
@@ -615,14 +705,32 @@ function LobbyScreen({ mp, playerName, playerCount, botDifficulty, turnTimeLimit
                     {name}{i === seat ? " (you)" : ""}
                   </span>
                   <span style={styles.lobbySeatTag}>
-                    {view.seatIsBot[i] ? "BOT" : "HUMAN"} · {TEAM_SHORT[TEAM_OF(i)]}
+                    {view.seatAway[i] ? "AWAY" : view.seatIsBot[i] ? "BOT" : "HUMAN"} ·{" "}
+                    {TEAM_SHORT[TEAM_OF(i)]}
                     {i === view.hostSeat ? " · HOST" : ""}
                   </span>
+                  {/* Handing the job over before leaving, rather than the table
+                      losing its host the moment you close the tab. */}
+                  {isHost && i !== view.hostSeat && view.seatConnected[i] && (
+                    <button style={styles.makeHostBtn} onClick={() => mp.transferHost(i)}>
+                      Make host
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
 
-            {isHost ? (
+            {view.spectators?.length > 0 && (
+              <div style={styles.lobbyHint}>
+                Watching: {view.spectators.join(", ")}
+              </div>
+            )}
+
+            {spectating ? (
+              <div style={styles.lobbyHint}>
+                You're watching this room. The game will appear here when the host starts it.
+              </div>
+            ) : isHost ? (
               <button style={styles.dealBtn} onClick={mp.startGame}>Start Game</button>
             ) : (
               <div style={styles.lobbyHint}>Waiting for the host to start…</div>
@@ -847,10 +955,12 @@ function SoloGameScreen({ playerName, playerCount, botDifficulty, turnTimeLimit,
    every card played is a request, and the screen only changes when the server
    sends back the next snapshot. */
 function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
-  const { view, error, seat, closedReason } = mp;
+  const { view, error, seat, closedReason, status, spectating } = mp;
   const prevScoreSum = useRef(0);
   const prevPhase = useRef(null);
 
+  /* A spectator has no team, so "your team's record" is meaningless to them —
+     the same counters are relabelled A/B rather than W/L further down. */
   const myTeam = seat != null ? TEAM_OF(seat) : "A";
 
   /* Sound cues are driven by diffing the server's snapshots, since there's no
@@ -978,20 +1088,35 @@ function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
     );
   }
 
-  const isHost = seat === view.hostSeat;
+  const isHost = !spectating && seat === view.hostSeat;
   const outcomes = {
     win: myTeam === "A" ? view.outcomes.A : view.outcomes.B,
     loss: myTeam === "A" ? view.outcomes.B : view.outcomes.A,
     tie: view.outcomes.tie,
   };
 
-  /* The host leaving ends the game for the whole table, so they get a blunter
-     warning than everyone else, who just hand their seat to a bot. */
+  /* Leaving no longer ends the table. The host's job moves to another connected
+     player, and any seat you vacate deliberately is released rather than held —
+     so the warning is about losing your place, not about ending everyone's
+     night. A host who *does* want to end it has the separate button below. */
   function handleQuit() {
-    const message = isHost
-      ? "You're the host — leaving ENDS the game for everyone at the table. Leave anyway?"
+    const otherHumans = view.seatConnected.filter((c, i) => c && i !== seat).length;
+    const message = spectating
+      ? "Stop watching this game?"
+      : isHost && otherHumans > 0
+      ? "Leave this game? Host duties pass to another player and the table plays on. Your seat becomes a bot."
+      : isHost
+      ? "You're the only one here — leaving ends this table. Leave anyway?"
       : "Leave this game? Your seat will be taken over by a bot.";
     if (window.confirm(message)) onQuit();
+  }
+
+  /* Deliberately ending the table for everyone — what host-leaves used to do
+     by accident, now something you have to mean. */
+  function handleEndTable() {
+    if (window.confirm("End the table for everyone? This closes the room for all players.")) {
+      mp.closeRoom();
+    }
   }
 
   /* A 420 ends the match for the whole table, so both sides get the same route
@@ -1004,13 +1129,29 @@ function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
     <GameTable
       view={view}
       outcomes={outcomes}
+      outcomeLabels={spectating ? ["A", "B", "T"] : ["W", "L", "T"]}
       onPlay={(card) => mp.play(card.id)}
       onQuit={handleQuit}
-      onAutoWin={mp.devWin}
+      onAutoWin={spectating ? undefined : mp.devWin}
+      onClaimSeat={spectating ? mp.claimSeat : undefined}
+      onEndTable={isHost ? handleEndTable : undefined}
       errorToast={error}
+      /* A drop is an interruption, not an ending — the server is holding the
+         seat while this reconnects, so the table stays on screen with a banner
+         rather than being replaced by a failure. */
+      statusBanner={
+        status === "reconnecting"
+          ? "Connection lost — getting you back into your seat…"
+          : null
+      }
       timeLeft={timeLeft}
       turnTimeLimit={view.turnLimit}
-      headerBadge={<div style={styles.waitingBadge}>ROOM {view.code}</div>}
+      headerBadge={
+        <div style={styles.waitingBadge}>
+          ROOM {view.code}
+          {spectating ? " · WATCHING" : ""}
+        </div>
+      }
       chatMessages={view.chat || []}
       onSendChat={mp.sendChat}
       chatEnabled={true}
@@ -1029,7 +1170,7 @@ function MultiplayerGameScreen({ mp, onMatchEnd, onQuit }) {
                 style={styles.dealBtn}
                 onClick={() => pendingSummary && onMatchEnd(pendingSummary)}
               >
-                {wonMercy ? "Claim Victory →" : "View Match Results →"}
+                {spectating ? "View Match Results →" : wonMercy ? "Claim Victory →" : "View Match Results →"}
               </button>
             ) : isHost ? (
               <button style={styles.dealBtn} onClick={mp.newHand}>Deal New Hand</button>

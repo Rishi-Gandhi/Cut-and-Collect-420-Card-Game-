@@ -21,6 +21,7 @@
    ------------------------------------------------------------------------ */
 
 import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
 import { createReadStream, stat } from "node:fs";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +63,27 @@ const TRICK_RESOLVE_MS = 1100;
    against this rather than trusted, so a client can't ask for a 1ms turn. */
 const ALLOWED_TURN_LIMITS = [8, 15];
 
+/* ---------- how long things are held open ----------
+   A dropped player's seat is *reserved* rather than surrendered: a bot plays it
+   in the meantime so the table never stalls, but the seat itself — name, team,
+   cards, and the right to come back to it — stays theirs for this long. Without
+   a hold, a thirty-second phone tunnel costs you the game permanently.
+
+   The room grace is the other half of the same idea: a room whose last person
+   just dropped can't be deleted immediately, or there'd be nothing to reconnect
+   *to*. Both are minutes rather than seconds because the failure they cover is
+   "my wifi died", and the cost of holding an empty room in a Map is nil.
+
+   Both are overridable, mostly so the behaviour can be exercised without
+   sitting through it — the windows are minutes, which is right for players and
+   impractical for a test. */
+const SEAT_HOLD_MS = Number(process.env.SEAT_HOLD_MS) || 3 * 60 * 1000;
+const EMPTY_ROOM_GRACE_MS = Number(process.env.EMPTY_ROOM_GRACE_MS) || 3 * 60 * 1000;
+
+/* Spectators are cheap (they get the same snapshot everyone else does) but not
+   free, and an unbounded list is a way to make one room expensive to serve. */
+const MAX_SPECTATORS = 20;
+
 /* ---------- room storage ----------
    In-memory only: restart the server and rooms are gone. That's a deliberate
    trade for a game like this — a room only needs to outlive one sitting, and
@@ -80,8 +102,46 @@ function makeRoomCode() {
 let nextClientId = 1;
 
 /* ---------- helpers ---------- */
+
+/* The credential that makes reconnecting possible. A WebSocket client id is
+   per-connection and useless across a drop, so a seat gets a secret of its own
+   that the player's device keeps. Random rather than derived from the name:
+   guessing one would mean walking into somebody else's seat and reading their
+   hand, so it needs to be unguessable, not merely unique. */
+function makeSeatToken() {
+  return randomBytes(16).toString("hex");
+}
+
+/* A seat with nobody connected is one of two very different things, and almost
+   every rule below turns on the difference:
+
+   - *reserved* — a human sat here and dropped. A bot covers the seat so play
+     continues, but it is still theirs to come back to, and nobody else may take
+     it. This is what makes a dropped connection recoverable.
+   - *open* — either nobody ever sat here, or the hold has run out. Free for a
+     spectator to claim. */
+function seatIsReserved(room, seat) {
+  const s = room.seats[seat];
+  if (s.clientId || !s.token || s.disconnectedAt == null) return false;
+  return Date.now() - s.disconnectedAt < SEAT_HOLD_MS;
+}
+function seatIsOpen(room, seat) {
+  return !room.seats[seat].clientId && !seatIsReserved(room, seat);
+}
+
+/* What the table calls this seat. Kept as a derived value rather than written
+   into `name` on disconnect, because mutating the stored name is lossy: two
+   drops in one session used to produce "Rishi (bot) (bot)", and there was then
+   no clean name left to restore on a reconnect. */
+function displayNameOf(room, i) {
+  const s = room.seats[i];
+  const base = s.name || `Player ${i + 1}`;
+  if (s.clientId) return base;
+  if (seatIsReserved(room, i)) return `${base} (away)`;
+  return s.token ? `${base} (bot)` : base;
+}
 function seatNamesOf(room) {
-  return room.seats.map((s, i) => (s.name || `Player ${i + 1}`));
+  return room.seats.map((_, i) => displayNameOf(room, i));
 }
 function isBotSeat(room, seat) {
   return !room.seats[seat].clientId;
@@ -89,12 +149,48 @@ function isBotSeat(room, seat) {
 function humanSeats(room) {
   return room.seats.filter((s) => s.clientId);
 }
+/* Anyone at all still attached — players *or* spectators. A room with only
+   spectators left is still worth keeping alive: the seats may all be held by
+   people mid-reconnect, and the watchers are still watching. */
+function roomHasPeople(room) {
+  return humanSeats(room).length > 0 || room.spectators.length > 0;
+}
+
+/* ---------- room reaping ----------
+   An emptied room isn't deleted on the spot any more, because "everyone left"
+   and "everyone's wifi blinked at once" look identical from here. It's parked:
+   game timers stop (nobody is watching a bot play to an empty room), and it is
+   deleted only if nobody comes back before the grace window closes. */
+function scheduleReap(room) {
+  clearTimeout(room.timer);
+  room.timer = null;
+  room.turnDeadline = null;
+  clearTimeout(room.reaper);
+  room.reaper = setTimeout(() => {
+    if (!roomHasPeople(room)) rooms.delete(room.code);
+  }, EMPTY_ROOM_GRACE_MS);
+}
+function cancelReap(room) {
+  clearTimeout(room.reaper);
+  room.reaper = null;
+}
+
+function systemChat(room, text) {
+  // team: null marks it as narration rather than someone talking
+  room.chat = [...room.chat, { name: null, team: null, text, system: true }].slice(-100);
+}
 
 function send(ws, msg) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
 
-/* The per-player view: full own hand, counts only for everyone else. */
+/* The per-player view: full own hand, counts only for everyone else.
+
+   `seat` is null for a spectator, and that single case is the whole of
+   spectator security: with no seat there is no hand to fill in, so a watcher
+   receives exactly the public table — card *counts* for everyone, nobody's
+   cards. Handing spectators the raw state would be an open door, since anyone
+   can open a second tab and watch the room they're playing in. */
 function buildView(room, seat) {
   const s = room.state;
   const base = {
@@ -103,8 +199,16 @@ function buildView(room, seat) {
     botDifficulty: room.botDifficulty,
     turnLimit: room.turnLimit,
     yourSeat: seat,
+    spectating: seat == null,
     seatNames: seatNamesOf(room),
     seatIsBot: room.seats.map((_, i) => isBotSeat(room, i)),
+    /* Three separate flags because the UI says three different things: an
+       empty chair you may sit in, a player who dropped and is expected back,
+       and a seat that was never anyone's. */
+    seatConnected: room.seats.map((x) => !!x.clientId),
+    seatAway: room.seats.map((_, i) => seatIsReserved(room, i)),
+    seatOpen: room.seats.map((_, i) => seatIsOpen(room, i)),
+    spectators: room.spectators.map((x) => x.name),
     hostSeat: room.hostSeat,
     chat: room.chat,
     gameNumber: room.gameNumber,
@@ -142,6 +246,14 @@ function broadcast(room) {
     if (!seatInfo.clientId) continue;
     const client = clients.get(seatInfo.clientId);
     if (client) send(client.ws, { type: "state", view: buildView(room, seatInfo.seat) });
+  }
+  // every spectator sees the same seatless view, so it's built once
+  if (room.spectators.length) {
+    const spectatorView = buildView(room, null);
+    for (const s of room.spectators) {
+      const client = clients.get(s.clientId);
+      if (client) send(client.ws, { type: "state", view: spectatorView });
+    }
   }
 }
 
@@ -239,19 +351,37 @@ function handleMessage(client, msg) {
         turnLimit,
         turnDeadline: null,
         hostSeat: 0,
-        // every seat starts as a bot; humans claim seats as they join
-        seats: Array.from({ length: seatCount }, (_, i) => ({ seat: i, clientId: null, name: null })),
+        /* Every seat starts as a bot; humans claim seats as they join.
+           `token` is the reconnect credential (null until a human sits here)
+           and `disconnectedAt` stamps when they dropped, which is what the
+           seat-hold window is measured from. */
+        seats: Array.from({ length: seatCount }, (_, i) => ({
+          seat: i,
+          clientId: null,
+          name: null,
+          token: null,
+          disconnectedAt: null,
+        })),
+        spectators: [],
         state: null,
         chat: [],
         gameNumber: 1,
         outcomes: { A: 0, B: 0, tie: 0 },
         timer: null,
+        reaper: null,
       };
-      room.seats[0] = { seat: 0, clientId: client.id, name: (msg.name || "").trim() || "Player 1" };
+      const token = makeSeatToken();
+      room.seats[0] = {
+        seat: 0,
+        clientId: client.id,
+        name: (msg.name || "").trim().slice(0, 24) || "Player 1",
+        token,
+        disconnectedAt: null,
+      };
       rooms.set(code, room);
       client.roomCode = code;
       client.seat = 0;
-      send(client.ws, { type: "joined", code, seat: 0 });
+      send(client.ws, { type: "joined", code, seat: 0, token });
       broadcast(room);
       break;
     }
@@ -260,15 +390,181 @@ function handleMessage(client, msg) {
       const code = (msg.code || "").trim().toUpperCase();
       const room = rooms.get(code);
       if (!room) return send(client.ws, { type: "error", message: `No room with code ${code}.` });
-      if (room.state) return send(client.ws, { type: "error", message: "That game has already started." });
-      const free = room.seats.find((s) => !s.clientId);
-      if (!free) return send(client.ws, { type: "error", message: "That room is full." });
+
+      /* A room that can't seat you is no longer a dead end — you can watch it
+         instead. Sent as its own message type rather than a plain error so the
+         client can offer that as a button; an error would just be a toast that
+         fades, leaving the person exactly where they started. */
+      if (room.state) {
+        return send(client.ws, {
+          type: "joinRejected",
+          code,
+          reason: "started",
+          message: "That game is already under way, so there's no seat to deal you in on.",
+          canSpectate: room.spectators.length < MAX_SPECTATORS,
+        });
+      }
+      // `seatIsOpen`, not "has no client": a seat being held for someone who
+      // dropped must not be handed to a stranger who happens to join next.
+      const free = room.seats.find((s) => seatIsOpen(room, s.seat));
+      if (!free) {
+        return send(client.ws, {
+          type: "joinRejected",
+          code,
+          reason: "full",
+          message: "That room is full.",
+          canSpectate: room.spectators.length < MAX_SPECTATORS,
+        });
+      }
+
       free.clientId = client.id;
-      free.name = (msg.name || "").trim() || `Player ${free.seat + 1}`;
+      free.name = (msg.name || "").trim().slice(0, 24) || `Player ${free.seat + 1}`;
+      free.token = makeSeatToken();
+      free.disconnectedAt = null;
       client.roomCode = code;
       client.seat = free.seat;
-      send(client.ws, { type: "joined", code, seat: free.seat });
+      cancelReap(room);
+      send(client.ws, { type: "joined", code, seat: free.seat, token: free.token });
       broadcast(room);
+      break;
+    }
+
+    /* ---------- reconnecting ----------
+       The seat is identified by its secret, not by the name typed in or the
+       connection asking. That matters: names are duplicable and connections are
+       new after a drop, so anything else here would let one player walk into
+       another's seat and be dealt their hand. */
+    case "resume": {
+      const code = (msg.code || "").trim().toUpperCase();
+      const room = rooms.get(code);
+      if (!room) {
+        return send(client.ws, {
+          type: "resumeFailed",
+          message: `Room ${code} has closed — it can't be rejoined.`,
+        });
+      }
+      /* Matched on the token alone, with no expiry check, and that's deliberate:
+         SEAT_HOLD_MS governs how long the seat is *withheld from other people*,
+         not how long the ticket stays valid. Once the hold lapses a spectator
+         may claim the seat — and claiming it issues a fresh token, which
+         invalidates this one. So while the seat is still sitting there unclaimed,
+         a late reconnect is simply welcome. */
+      const token = String(msg.token || "");
+      const seatInfo = token && room.seats.find((s) => s.token === token);
+      if (!seatInfo) {
+        return send(client.ws, {
+          type: "resumeFailed",
+          message: "That seat is no longer being held for you.",
+        });
+      }
+      if (seatInfo.clientId && seatInfo.clientId !== client.id) {
+        return send(client.ws, {
+          type: "resumeFailed",
+          message: "Something else is already connected to that seat.",
+        });
+      }
+
+      seatInfo.clientId = client.id;
+      seatInfo.disconnectedAt = null;
+      client.roomCode = code;
+      client.seat = seatInfo.seat;
+      cancelReap(room);
+      send(client.ws, { type: "joined", code, seat: seatInfo.seat, token: seatInfo.token, resumed: true });
+      systemChat(room, `${displayNameOf(room, seatInfo.seat)} reconnected.`);
+      /* Re-derive what the table owes: the seat was a bot a moment ago and may
+         have a bot move already scheduled against it. Rescheduling cancels that
+         and hands the turn (and a fresh clock) back to the human. */
+      scheduleAdvance(room);
+      broadcast(room);
+      break;
+    }
+
+    /* ---------- watching ----------
+       A spectator holds no seat, so `client.seat` stays null — which is the
+       flag every other handler checks before letting an action through, and
+       what makes buildView withhold every hand. */
+    case "spectate": {
+      const code = (msg.code || "").trim().toUpperCase();
+      const room = rooms.get(code);
+      if (!room) return send(client.ws, { type: "error", message: `No room with code ${code}.` });
+      if (room.spectators.some((s) => s.clientId === client.id)) return;
+      if (room.spectators.length >= MAX_SPECTATORS) {
+        return send(client.ws, { type: "error", message: "That room has as many spectators as it can take." });
+      }
+      const name = (msg.name || "").trim().slice(0, 24) || "Spectator";
+      room.spectators.push({ clientId: client.id, name });
+      client.roomCode = code;
+      client.seat = null;
+      cancelReap(room);
+      send(client.ws, { type: "joined", code, seat: null, spectating: true });
+      systemChat(room, `${name} is watching.`);
+      broadcast(room);
+      break;
+    }
+
+    /* A watcher taking a seat that has genuinely come free — the natural end of
+       spectating, and the reason a full room isn't a permanent no. Whatever the
+       bot has been holding (its cards, its tricks) comes with the seat, so this
+       works mid-hand exactly the way reconnecting into a bot-covered seat does. */
+    case "claimSeat": {
+      const room = rooms.get(client.roomCode);
+      if (!room || client.seat != null) return;
+      const target = room.seats[msg.seat];
+      if (!target) return send(client.ws, { type: "error", message: "No such seat." });
+      if (!seatIsOpen(room, target.seat)) {
+        return send(client.ws, {
+          type: "error",
+          message: "That seat isn't free — someone's in it, or it's being held for a player who dropped.",
+        });
+      }
+      const spec = room.spectators.find((s) => s.clientId === client.id);
+      room.spectators = room.spectators.filter((s) => s.clientId !== client.id);
+      target.clientId = client.id;
+      target.name = spec?.name || `Player ${target.seat + 1}`;
+      target.token = makeSeatToken();
+      target.disconnectedAt = null;
+      client.seat = target.seat;
+      send(client.ws, { type: "joined", code: room.code, seat: target.seat, token: target.token });
+      systemChat(room, `${displayNameOf(room, target.seat)} took seat ${target.seat + 1}.`);
+      scheduleAdvance(room); // a bot seat just became human — cancel its pending move
+      broadcast(room);
+      break;
+    }
+
+    /* ---------- passing the host on ----------
+       Host is a job (deal the next hand, start the game), not an owner, so it
+       can be handed over. Before this the job was welded to seat 0 and the
+       table died when that person left. */
+    case "transferHost": {
+      const room = rooms.get(client.roomCode);
+      if (!room) return;
+      if (client.seat !== room.hostSeat) {
+        return send(client.ws, { type: "error", message: "Only the host can pass host duties on." });
+      }
+      const target = room.seats[msg.seat];
+      if (!target || !target.clientId) {
+        return send(client.ws, {
+          type: "error",
+          message: "Host can only go to a seat with a connected player in it.",
+        });
+      }
+      if (target.seat === room.hostSeat) return;
+      room.hostSeat = target.seat;
+      systemChat(room, `${displayNameOf(room, target.seat)} is now the host.`);
+      broadcast(room);
+      break;
+    }
+
+    /* The host deliberately ending the table. This used to be the *only*
+       outcome of a host leaving; now that leaving passes the job on instead, it
+       needs to be something the host asks for on purpose. */
+    case "closeRoom": {
+      const room = rooms.get(client.roomCode);
+      if (!room) return;
+      if (client.seat !== room.hostSeat) {
+        return send(client.ws, { type: "error", message: "Only the host can end the table." });
+      }
+      closeRoom(room, `${displayNameOf(room, room.hostSeat)} (the host) ended the table.`);
       break;
     }
 
@@ -286,6 +582,8 @@ function handleMessage(client, msg) {
     case "play": {
       const room = rooms.get(client.roomCode);
       if (!room || !room.state) return;
+      // no seat, no move — a spectator's "play" is not a play
+      if (client.seat == null) return;
       // the server derives legality itself — a client claiming a role is ignored
       const res = applyPlay(room.state, client.seat, msg.cardId, seatNamesOf(room));
       if (res.error) return send(client.ws, { type: "error", message: res.error });
@@ -312,9 +610,17 @@ function handleMessage(client, msg) {
       if (!room) return;
       const text = (msg.text || "").trim().slice(0, 200);
       if (!text) return;
+      /* Spectators may talk — watching in enforced silence is a poor
+         experience — but they're labelled rather than blended in: a remark from
+         someone watching the whole table reads differently from a player's, and
+         they have no team to be posted under. */
+      const spec = client.seat == null ? room.spectators.find((s) => s.clientId === client.id) : null;
+      if (client.seat == null && !spec) return;
       room.chat = [
         ...room.chat,
-        { name: seatNamesOf(room)[client.seat], team: TEAM_OF(client.seat), text },
+        client.seat == null
+          ? { name: spec.name, team: null, text, spectator: true }
+          : { name: displayNameOf(room, client.seat), team: TEAM_OF(client.seat), text },
       ].slice(-100); // keep the last 100 so a long session can't grow unbounded
       broadcast(room);
       break;
@@ -329,6 +635,7 @@ function handleMessage(client, msg) {
     case "devWin": {
       const room = rooms.get(client.roomCode);
       if (!room || !room.state) return;
+      if (client.seat == null) return; // a spectator has no team to hand it to
       const team = TEAM_OF(client.seat);
       const other = team === "A" ? "B" : "A";
       clearTimeout(room.timer);
@@ -364,47 +671,72 @@ function handleMessage(client, msg) {
    instead of appearing to freeze. */
 function closeRoom(room, reason) {
   clearTimeout(room.timer);
-  for (const seatInfo of room.seats) {
-    if (!seatInfo.clientId) continue;
-    const c = clients.get(seatInfo.clientId);
-    if (!c) continue;
+  cancelReap(room);
+  const notify = (id) => {
+    const c = clients.get(id);
+    if (!c) return;
     send(c.ws, { type: "roomClosed", reason });
     c.roomCode = null;
     c.seat = null;
-  }
+  };
+  for (const seatInfo of room.seats) if (seatInfo.clientId) notify(seatInfo.clientId);
+  for (const s of room.spectators) notify(s.clientId);
   rooms.delete(room.code);
 }
 
 /* ---------- disconnects ----------
-   Two different outcomes depending on who left:
+   Losing a connection is no longer the same as leaving. A dropped player's seat
+   is *held* for them (SEAT_HOLD_MS) with a bot covering it, so the table keeps
+   playing and they can walk straight back into it — see the "resume" handler.
 
-   - The HOST leaving ends the game for everyone. The host is the only seat
-     that can deal the next hand, and quietly promoting someone else changes
-     the game out from under a table that didn't agree to it. Cleaner to close
-     the room and let people regroup.
-   - Anyone else leaving just hands their seat to a bot, so the rest of the
-     table plays on uninterrupted. */
+   The host dropping used to end the game for everyone, on the reasoning that
+   the host is the only seat that can deal the next hand. That cure was worse
+   than the disease: one person's wifi ended everybody's night. Now the job
+   moves to another connected player, and the room only closes when the host
+   asks it to. If nobody is left to inherit, the room is parked rather than
+   deleted, so the host can reconnect and still be the host. */
 function handleDisconnect(client) {
   clients.delete(client.id);
   const room = rooms.get(client.roomCode);
   if (!room) return;
+
+  // a spectator leaving costs the table nothing
+  if (client.seat == null) {
+    const before = room.spectators.length;
+    room.spectators = room.spectators.filter((s) => s.clientId !== client.id);
+    if (room.spectators.length === before) return;
+    if (!roomHasPeople(room)) return scheduleReap(room);
+    broadcast(room);
+    return;
+  }
+
   const seatInfo = room.seats[client.seat];
   if (!seatInfo || seatInfo.clientId !== client.id) return;
 
+  // the seat becomes bot-played but stays theirs: token kept, clock started
   seatInfo.clientId = null;
+  seatInfo.disconnectedAt = Date.now();
 
   if (client.seat === room.hostSeat) {
-    closeRoom(room, `${seatInfo.name} (the host) left — the game has ended.`);
-    return;
+    const heir = room.seats.find((s) => s.clientId);
+    if (heir) {
+      room.hostSeat = heir.seat;
+      systemChat(
+        room,
+        `${seatInfo.name || `Player ${client.seat + 1}`} dropped — ${displayNameOf(room, heir.seat)} is now the host.`
+      );
+    }
+    /* No heir: hostSeat deliberately stays pointing at the empty seat. The room
+       is about to be parked anyway, and leaving it put means a host who
+       reconnects inside the grace window gets their job back. */
+  } else {
+    // the bare name, not displayNameOf — the seat is already marked away, so
+    // that would read "Bob (away) dropped"
+    systemChat(room, `${seatInfo.name || `Player ${client.seat + 1}`} dropped — a bot is covering the seat.`);
   }
 
-  seatInfo.name = `${seatInfo.name} (bot)`;
-  if (humanSeats(room).length === 0) {
-    clearTimeout(room.timer);
-    rooms.delete(room.code);
-    return;
-  }
-  scheduleAdvance(room); // the seat just became a bot — it may now owe a move
+  if (!roomHasPeople(room)) return scheduleReap(room);
+  scheduleAdvance(room); // the seat is bot-played now — it may owe a move
   broadcast(room);
 }
 

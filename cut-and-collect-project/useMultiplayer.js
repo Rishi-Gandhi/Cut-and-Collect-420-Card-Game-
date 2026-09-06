@@ -123,17 +123,78 @@ function writeStoredServerUrl(url) {
   }
 }
 
+/* ---------- the reconnect ticket ----------
+   The server hands out a per-seat token when you sit down, and that token —
+   not this connection, and not the name typed in — is what identifies the seat
+   afterwards. Kept in localStorage rather than in React state because the case
+   worth surviving is the tab being closed or reloaded, which takes all state
+   with it.
+
+   Deliberately *not* cleared when the socket drops: a drop is precisely when
+   it becomes useful. It's cleared when the player leaves on purpose, when the
+   room closes, and when the server says the seat is no longer theirs. */
+const SESSION_KEY = "cutcollect.session";
+
+function readSession() {
+  try {
+    const raw = window.localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    return s && s.code && s.token ? s : null;
+  } catch {
+    return null;
+  }
+}
+function writeSession(session) {
+  try {
+    if (session) window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* the game still works, you just can't rejoin after closing the tab */
+  }
+}
+
+/* Backoff for automatic reconnection. Starts fast, because most drops are a
+   blip and land on the first retry, and stretches out rather than hammering a
+   server that may be genuinely gone. The list length is the give-up point. */
+const RECONNECT_DELAYS = [400, 900, 2000, 4000, 8000];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 export function useMultiplayer() {
-  const [status, setStatus] = useState("idle"); // idle | connecting | connected | closed | error
+  const [status, setStatus] = useState("idle"); // idle | connecting | connected | reconnecting | closed | error
   const [view, setView] = useState(null);
   const [error, setError] = useState(null);
   const [seat, setSeat] = useState(null);
   const [code, setCode] = useState(null);
-  /* Set when the server deliberately ends the room (currently: the host left).
-     Distinct from `error` because it's terminal — the game is over, not
-     temporarily unhappy — so the UI shows a dead end rather than a toast. */
+  /* Set when the server deliberately ends the room, or when a seat we were
+     holding a ticket for is gone for good. Distinct from `error` because it's
+     terminal — the game is over, not temporarily unhappy — so the UI shows a
+     dead end rather than a toast. */
   const [closedReason, setClosedReason] = useState(null);
+  /* True while watching rather than playing. Kept alongside `seat` because
+     "no seat yet" and "deliberately seatless" are different states. */
+  const [spectating, setSpectating] = useState(false);
+  /* The server's answer when a room can't seat you, held rather than flashed:
+     it carries a "watch instead" offer the player has to be able to act on. */
+  const [joinRejection, setJoinRejection] = useState(null);
+  /* A ticket left over from a previous session — a closed tab, a reload, a
+     crash — which the Home screen turns into a "rejoin" offer. */
+  const [resumable, setResumable] = useState(() =>
+    typeof window === "undefined" ? null : readSession()
+  );
   const wsRef = useRef(null);
+
+  /* The seat ticket for the room we're currently in. A ref because the socket
+     callbacks below need the live value, not the one captured when they were
+     created. */
+  const sessionRef = useRef(null);
+  /* Set while we're closing the socket on purpose, so its `onclose` doesn't
+     mistake a deliberate exit for a dropped connection and start reconnecting. */
+  const leavingRef = useRef(false);
+  /* Guards the retry loop against being started twice — each failed attempt
+     closes a socket, whose own onclose would otherwise start another loop. */
+  const retryingRef = useRef(false);
+  const reconnectRef = useRef(null);
 
   /* The address is state so editing it re-renders, and *also* a ref because
      connect() is a useCallback that would otherwise close over a stale value
@@ -170,15 +231,24 @@ export function useMultiplayer() {
   }, [error]);
 
   const disconnect = useCallback(() => {
+    leavingRef.current = true;
     if (wsRef.current) {
       wsRef.current.onclose = null; // we're closing on purpose — don't report it as a drop
       wsRef.current.close();
       wsRef.current = null;
     }
+    /* Leaving on purpose gives up the seat: the ticket is what makes the server
+       hold it, and holding a seat for someone who walked away would keep a bot
+       in a chair a real player could have. */
+    sessionRef.current = null;
+    writeSession(null);
+    setResumable(null);
     setStatus("idle");
     setView(null);
     setSeat(null);
     setCode(null);
+    setSpectating(false);
+    setJoinRejection(null);
     setError(null);
     setClosedReason(null);
   }, []);
@@ -188,7 +258,8 @@ export function useMultiplayer() {
      write to it before it's open. */
   const connect = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return Promise.resolve(true);
-    setStatus("connecting");
+    leavingRef.current = false;
+    setStatus((s) => (s === "reconnecting" ? s : "connecting"));
     return new Promise((resolve) => {
       let ws;
       try {
@@ -215,18 +286,56 @@ export function useMultiplayer() {
         else if (msg.type === "joined") {
           setSeat(msg.seat);
           setCode(msg.code);
+          setSpectating(!!msg.spectating);
+          setJoinRejection(null);
+          setStatus("connected");
+          retryingRef.current = false;
+          /* Only a seat is worth a ticket. A spectator has nothing the server
+             is holding for them, so there is nothing to come back to. */
+          if (msg.token) {
+            const session = { code: msg.code, token: msg.token, seat: msg.seat };
+            sessionRef.current = session;
+            writeSession(session);
+            setResumable(session);
+          }
+        } else if (msg.type === "joinRejected") {
+          setJoinRejection(msg);
+        } else if (msg.type === "resumeFailed") {
+          /* The seat is genuinely gone — someone took it, or the room closed.
+             Drop the ticket so we stop offering to rejoin something that isn't
+             there, and show it as terminal rather than as a retryable error. */
+          sessionRef.current = null;
+          writeSession(null);
+          setResumable(null);
+          retryingRef.current = false;
+          setClosedReason(msg.message || "That game can't be rejoined.");
+          if (wsRef.current) wsRef.current.onclose = null;
         } else if (msg.type === "roomClosed") {
           // the room is gone; stop treating the socket's own close as a fault
-          setClosedReason(msg.reason || "The game has ended due to the host disconnecting.");
+          sessionRef.current = null;
+          writeSession(null);
+          setResumable(null);
+          setClosedReason(msg.reason || "The game has ended.");
           if (wsRef.current) wsRef.current.onclose = null;
         } else if (msg.type === "error") setError(msg.message);
       };
       ws.onerror = () => {
-        setStatus("error");
-        setError(`Couldn't reach the game server at ${serverUrlRef.current}. Is it running?`);
+        // during a retry loop this is expected — the loop reports the failure
+        if (!retryingRef.current) {
+          setStatus("error");
+          setError(`Couldn't reach the game server at ${serverUrlRef.current}. Is it running?`);
+        }
         resolve(false);
       };
       ws.onclose = () => {
+        if (leavingRef.current) return;
+        /* Holding a seat ticket turns a dropped connection from an ending into
+           an interruption: the server is keeping the seat, so go and get it
+           back rather than reporting a dead game. */
+        if (sessionRef.current) {
+          reconnectRef.current?.();
+          return;
+        }
         setStatus("closed");
         setError("Lost connection to the game server.");
       };
@@ -237,6 +346,53 @@ export function useMultiplayer() {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   }, []);
+
+  /* Walk back in with the ticket. Used both automatically (a drop mid-game) and
+     manually (the "rejoin" offer after a reload), which is why it takes the
+     session explicitly rather than only reading the ref. */
+  const resumeSession = useCallback(
+    async (session) => {
+      const s = session || sessionRef.current || readSession();
+      if (!s) return false;
+      sessionRef.current = s;
+      setClosedReason(null);
+      const ok = await connect();
+      if (!ok) return false;
+      send({ type: "resume", code: s.code, token: s.token });
+      return true;
+    },
+    [connect, send]
+  );
+
+  /* The automatic half: retry on a backoff until the seat is back or the list
+     of delays runs out. Only ever one of these running — a failed attempt
+     closes its socket, and that close would otherwise start a second loop. */
+  const attemptReconnect = useCallback(async () => {
+    if (retryingRef.current) return;
+    const session = sessionRef.current;
+    if (!session) return;
+    retryingRef.current = true;
+    setStatus("reconnecting");
+
+    for (const delay of RECONNECT_DELAYS) {
+      if (leavingRef.current || !sessionRef.current) break;
+      await sleep(delay);
+      if (leavingRef.current || !sessionRef.current) break;
+      wsRef.current = null; // the dead socket is not worth reusing
+      const ok = await connect();
+      if (!ok) continue;
+      send({ type: "resume", code: session.code, token: session.token });
+      return; // the answer arrives as `joined` or `resumeFailed`
+    }
+
+    if (retryingRef.current) {
+      retryingRef.current = false;
+      setStatus("closed");
+      setError("Lost connection to the game server.");
+    }
+  }, [connect, send]);
+  // assigned during render, matching how serverUrlRef is kept current above
+  reconnectRef.current = attemptReconnect;
 
   const createRoom = useCallback(
     async (name, seatCount, botDifficulty, turnLimit = null) => {
@@ -249,8 +405,20 @@ export function useMultiplayer() {
 
   const joinRoom = useCallback(
     async (roomCode, name) => {
+      setJoinRejection(null); // a fresh attempt, not a rerun of the last refusal
       const ok = await connect();
       if (ok) send({ type: "join", code: roomCode, name });
+      return ok;
+    },
+    [connect, send]
+  );
+
+  /* Watching instead of playing — the answer to a room that's full or already
+     under way. No seat, so no ticket and nothing held on the server. */
+  const spectateRoom = useCallback(
+    async (roomCode, name) => {
+      const ok = await connect();
+      if (ok) send({ type: "spectate", code: roomCode, name });
       return ok;
     },
     [connect, send]
@@ -261,14 +429,23 @@ export function useMultiplayer() {
   const newHand = useCallback(() => send({ type: "newHand" }), [send]);
   const sendChat = useCallback((text) => send({ type: "chat", text }), [send]);
   const devWin = useCallback(() => send({ type: "devWin" }), [send]);
+  const claimSeat = useCallback((seatIndex) => send({ type: "claimSeat", seat: seatIndex }), [send]);
+  const transferHost = useCallback((seatIndex) => send({ type: "transferHost", seat: seatIndex }), [send]);
+  const closeRoom = useCallback(() => send({ type: "closeRoom" }), [send]);
+  const dismissJoinRejection = useCallback(() => setJoinRejection(null), []);
 
   // close the socket if the component tree using this hook goes away
-  useEffect(() => () => wsRef.current?.close(), []);
+  useEffect(() => () => {
+    leavingRef.current = true;
+    wsRef.current?.close();
+  }, []);
 
   return {
-    status, view, error, seat, code, closedReason,
+    status, view, error, seat, code, closedReason, spectating, joinRejection, resumable,
     serverUrl, setServerUrl, resetServerUrl, defaultServerUrl: defaultServerUrl(),
-    connect, disconnect, createRoom, joinRoom, startGame, play, newHand, sendChat, devWin,
+    connect, disconnect, createRoom, joinRoom, spectateRoom, resumeSession,
+    startGame, play, newHand, sendChat, devWin, claimSeat, transferHost, closeRoom,
+    dismissJoinRejection,
     clearError: () => setError(null),
   };
 }

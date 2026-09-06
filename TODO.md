@@ -81,14 +81,24 @@ Captured for later — nothing here is being worked on yet.
   `shared/game-rules.js` so client and server run the exact same code.
 - ~~Semi-multiplayer — a mix of some human players and some bots~~ — done, and it's the
   default rather than a separate mode: any seat nobody joins is played by a bot, so the
-  host can start without a full table. A *non-host* who disconnects is taken over by a
-  bot and the table plays on; the **host** leaving ends the game for everyone (they're
-  the only seat that can deal the next hand), and the others get a "game has ended"
-  screen rather than a silent freeze.
-- Reconnect to a game in progress — right now leaving hands your seat to a bot for good
-- Spectator mode for a full room
-- Let the host hand off host duties before leaving, so one person quitting doesn't have
-  to end the table's night
+  host can start without a full table.
+- ~~Reconnect to a game in progress~~ — done. A dropped player's seat is *held* for
+  three minutes with a bot covering it, rather than surrendered. The server issues a
+  per-seat token when you sit down; the client keeps it in localStorage and walks back
+  in with it. A blip reconnects automatically with no button to press; a closed tab or
+  a reload gets a "Rejoin room XXXX" offer on the home screen. A room whose last player
+  drops is *parked* for three minutes rather than deleted, so there's something to come
+  back to.
+- ~~Spectator mode for a full room~~ — done. A room that's full or already under way
+  now offers to let you watch instead of just refusing. Spectators hold no seat, which
+  is also the whole of the security model: with no seat there's no hand to send them,
+  so they get the public table (card counts, the trick, chat) and nobody's cards. They
+  can talk, labelled as watching, and can take a seat that genuinely frees up.
+- ~~Let the host hand off host duties before leaving~~ — done, both ways. The host can
+  pass the job to any connected player from the lobby, and a host who simply drops has
+  it promoted to someone else automatically instead of ending everyone's night. Closing
+  the table for everyone is now a deliberate "End Table" button rather than a side
+  effect of the host's wifi.
 
 ## Match results
 - ~~A multiplayer end screen that's about the match, not a personal record~~ — done.
