@@ -31,7 +31,11 @@ function normalizeEntry(e) {
 export function readLeaderboard(filePath) {
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    return raw.map(normalizeEntry);
+    // Sort on every read, not just after a write — otherwise the on-disk
+    // array order (which only reflects the last recordResult() call) leaks
+    // straight to the UI, and a hand-edited file displays in whatever order
+    // its entries happen to sit in rather than by rank.
+    return sortLeaderboard(raw.map(normalizeEntry));
   } catch {
     return [];
   }
